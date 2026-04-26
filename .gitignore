@@ -1,0 +1,49 @@
+# OS files
+.DS_Store
+
+# IDE / Editor
+.idea/
+*.iml
+
+# Cursor local artifacts
+.cursor/agent/
+
+# Gradle / Kotlin / Android build outputs
+.gradle/
+.kotlin/
+build/
+**/build/
+.externalNativeBuild/
+.cxx/
+captures/
+local.properties
+
+# Logs
+*.log
+
+# Python virtual env / cache
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Temporary local work dirs
+.tmp/
+tmp/
+
+# Large local model artifacts (keep placeholders only)
+*.pte
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+tokenizer.json
+
+# Project-specific local model/data folders
+models/
+androidApp/src/main/assets/models/smollm2/
+
+# Keep intentional placeholders
+!**/.gitkeep
