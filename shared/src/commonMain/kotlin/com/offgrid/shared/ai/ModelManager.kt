@@ -6,5 +6,6 @@ import kotlinx.coroutines.flow.Flow
 interface ModelManager {
     suspend fun loadModel(): AppResult<Unit>
     fun streamResponse(prompt: String): Flow<String>
+    fun stopGeneration()
     suspend fun unloadModel()
 }

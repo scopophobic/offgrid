@@ -25,6 +25,10 @@ class MockModelManager : ModelManager {
         }
     }
 
+    override fun stopGeneration() {
+        // No-op for mock implementation.
+    }
+
     override suspend fun unloadModel() {
         isLoaded = false
     }
