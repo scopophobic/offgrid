@@ -51,6 +51,12 @@ fun ChatScreen(
         if (uiState.isLoading) {
             CircularProgressIndicator()
         }
+        if (uiState.isRetrieving) {
+            Text(
+                text = "Searching local knowledge...",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
 
         uiState.error?.let { error ->
             Text(text = error, color = MaterialTheme.colorScheme.error)
@@ -64,13 +70,20 @@ fun ChatScreen(
                 value = input,
                 onValueChange = { input = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Ask something...") }
+                placeholder = { Text("Ask something...") },
+                enabled = !uiState.isLoading
             )
-            Button(onClick = {
-                viewModel.sendMessage(input)
-                input = ""
-            }) {
-                Text("Send")
+            if (uiState.isLoading) {
+                Button(onClick = { viewModel.stopGeneration() }) {
+                    Text("Stop")
+                }
+            } else {
+                Button(onClick = {
+                    viewModel.sendMessage(input)
+                    input = ""
+                }) {
+                    Text("Send")
+                }
             }
         }
     }

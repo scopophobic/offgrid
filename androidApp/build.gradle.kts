@@ -28,6 +28,11 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    androidResources {
+        // Large model assets should not be compressed during packaging.
+        noCompress += listOf("pte")
+    }
 }
 
 dependencies {
