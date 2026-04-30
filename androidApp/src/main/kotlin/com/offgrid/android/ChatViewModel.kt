@@ -3,11 +3,13 @@ package com.offgrid.android
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.offgrid.shared.ai.ModelManager
+import com.offgrid.shared.knowledge.HybridRetriever
+import com.offgrid.shared.knowledge.KnowledgePack
+import com.offgrid.shared.knowledge.KnowledgePackStore
 import com.offgrid.shared.models.AppResult
 import com.offgrid.shared.models.ChatMessage
 import com.offgrid.shared.models.ChatUiState
 import com.offgrid.shared.rag.QueryAnswerCache
-import com.offgrid.shared.rag.SimpleRagPipeline
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,11 +21,19 @@ import java.util.UUID
 
 class ChatViewModel(
     private val modelManager: ModelManager,
-    private val ragPipeline: SimpleRagPipeline,
+    private val packStore: KnowledgePackStore,
+    private val retriever: HybridRetriever,
     private val answerCache: QueryAnswerCache
 ) : ViewModel() {
+
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    val installedPacks: StateFlow<List<KnowledgePack>> = packStore.installed()
+
+    private val _isRefreshingPacks = MutableStateFlow(false)
+    val isRefreshingPacks: StateFlow<Boolean> = _isRefreshingPacks.asStateFlow()
+
     private var generationJob: Job? = null
 
     init {
@@ -33,6 +43,7 @@ class ChatViewModel(
                 is AppResult.Error -> _uiState.update { it.copy(error = result.message) }
             }
         }
+        refreshPacks()
     }
 
     fun sendMessage(text: String) {
@@ -69,7 +80,7 @@ class ChatViewModel(
                     return@launch
                 }
 
-                val promptForModel = ragPipeline.buildPrompt(text)
+                val promptForModel = retriever.buildPrompt(text)
                 _uiState.update { it.copy(isRetrieving = false) }
 
                 modelManager.streamResponse(promptForModel).collect { token ->
@@ -80,7 +91,8 @@ class ChatViewModel(
                         state.copy(messages = updated)
                     }
                 }
-                val finalAnswer = _uiState.value.messages.firstOrNull { it.id == responseId }?.text.orEmpty()
+                val finalAnswer =
+                    _uiState.value.messages.firstOrNull { it.id == responseId }?.text.orEmpty()
                 if (finalAnswer.isNotBlank()) {
                     answerCache.put(text, finalAnswer)
                 }
@@ -104,19 +116,32 @@ class ChatViewModel(
         generationJob?.cancel()
         generationJob = null
         _uiState.update { state ->
-            val updatedMessages =
-                state.messages.toMutableList().also { messages ->
-                    val lastIndex = messages.indexOfLast { !it.fromUser }
-                    if (lastIndex >= 0 && messages[lastIndex].text.isBlank()) {
-                        messages[lastIndex] = messages[lastIndex].copy(text = "[stopped]")
-                    }
+            val updatedMessages = state.messages.toMutableList().also { messages ->
+                val lastIndex = messages.indexOfLast { !it.fromUser }
+                if (lastIndex >= 0 && messages[lastIndex].text.isBlank()) {
+                    messages[lastIndex] = messages[lastIndex].copy(text = "[stopped]")
                 }
+            }
             state.copy(
                 messages = updatedMessages,
                 isLoading = false,
                 isRetrieving = false,
                 error = null
             )
+        }
+    }
+
+    fun refreshPacks() {
+        if (_isRefreshingPacks.value) return
+        viewModelScope.launch {
+            _isRefreshingPacks.value = true
+            try {
+                packStore.refresh()
+            } catch (t: Throwable) {
+                _uiState.update { it.copy(error = "Pack refresh failed: ${t.message}") }
+            } finally {
+                _isRefreshingPacks.value = false
+            }
         }
     }
 
