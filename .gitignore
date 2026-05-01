@@ -45,5 +45,12 @@ tokenizer.json
 models/
 androidApp/src/main/assets/models/smollm2/
 
+# Node / npm
+node_modules/
+.npm/
+
+# Knowledge Factory generated packs (rebuildable from topic configs)
+backend/factory/out/
+
 # Keep intentional placeholders
 !**/.gitkeep
