@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,6 +25,12 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,8 +52,10 @@ private val InkBlack = Color(0xFF111111)
 private val SoftMuted = Color(0xFF888888)
 private val FaintRule = Color(0xFFEAEAEA)
 private val UserBubble = Color(0xFFF2F2F2)
+private val MascotPurple = Color(0xFF8E7BFF)
 
 private enum class AppPage { Chat, Knowledge }
+private enum class KnowledgeSubTab { Catalog, Installed }
 
 @Composable
 fun OffgridApp(viewModel: ChatViewModel) {
@@ -111,6 +121,7 @@ private fun ChatPanel(viewModel: ChatViewModel) {
     val packs by viewModel.installedPacks.collectAsStateWithLifecycle()
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val mascotActive = uiState.isLoading || uiState.isRetrieving
 
     LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text?.length) {
         if (uiState.messages.isNotEmpty()) {
@@ -122,6 +133,7 @@ private fun ChatPanel(viewModel: ChatViewModel) {
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        MascotRow(active = mascotActive)
         if (uiState.messages.isEmpty()) {
             EmptyChatHint(packCount = packs.size)
         }
@@ -270,7 +282,12 @@ private fun InputRow(
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(
+        modifier = Modifier
+            .imePadding()
+            .navigationBarsPadding(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(FaintRule))
         Row(
             modifier = Modifier
@@ -311,6 +328,38 @@ private fun InputRow(
 }
 
 @Composable
+private fun MascotRow(active: Boolean) {
+    val transition = rememberInfiniteTransition(label = "mascot")
+    val pulse by transition.animateFloat(
+        initialValue = 0.75f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse"
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .width(28.dp)
+                .height(28.dp)
+                .clip(CircleShape)
+                .background(MascotPurple.copy(alpha = if (active) pulse else 0.4f))
+        )
+        Text(
+            text = if (active) "Mascot is thinking..." else "Mascot is idle",
+            color = SoftMuted,
+            fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
 private fun PillButton(label: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
@@ -332,6 +381,20 @@ private fun PillButton(label: String, onClick: () -> Unit) {
 private fun KnowledgePanel(viewModel: ChatViewModel) {
     val packs by viewModel.installedPacks.collectAsStateWithLifecycle()
     val refreshing by viewModel.isRefreshingPacks.collectAsStateWithLifecycle()
+    val catalog by viewModel.availablePacks.collectAsStateWithLifecycle()
+    val refreshingCatalog by viewModel.isRefreshingCatalog.collectAsStateWithLifecycle()
+    val installingIds by viewModel.installingPackIds.collectAsStateWithLifecycle()
+    val deletingIds by viewModel.deletingPackIds.collectAsStateWithLifecycle()
+    var subTab by rememberSaveable { mutableStateOf(KnowledgeSubTab.Catalog) }
+    var search by rememberSaveable { mutableStateOf("") }
+    val filteredCatalog = catalog.filter { pack ->
+        val q = search.trim().lowercase()
+        if (q.isEmpty()) true else {
+            "${pack.title} ${pack.description} ${pack.tags.joinToString(" ")} ${pack.id}"
+                .lowercase()
+                .contains(q)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -353,7 +416,7 @@ private fun KnowledgePanel(viewModel: ChatViewModel) {
                 )
                 Text(
                     text = if (packs.isEmpty()) {
-                        "Sideload a pack ZIP to get started."
+                        "No installed modules yet."
                     } else {
                         "${packs.size} installed · used to ground chat answers."
                     },
@@ -361,19 +424,90 @@ private fun KnowledgePanel(viewModel: ChatViewModel) {
                     fontSize = 13.sp
                 )
             }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PillButton(
+                label = if (refreshingCatalog) "Loading..." else "Catalog",
+                onClick = { if (!refreshingCatalog) viewModel.refreshCatalog() }
+            )
             PillButton(
                 label = if (refreshing) "Scanning" else "Refresh",
                 onClick = { if (!refreshing) viewModel.refreshPacks() }
             )
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TabLabel(
+                text = "Catalog",
+                selected = subTab == KnowledgeSubTab.Catalog,
+                onClick = { subTab = KnowledgeSubTab.Catalog }
+            )
+            TabLabel(
+                text = "Installed",
+                selected = subTab == KnowledgeSubTab.Installed,
+                onClick = { subTab = KnowledgeSubTab.Installed }
+            )
+        }
         Spacer(Modifier.height(4.dp))
-        if (packs.isEmpty()) {
-            EmptyPacksHint()
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                items(packs, key = { it.id }) { pack ->
-                    PackRow(pack = pack)
-                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(FaintRule))
+        when (subTab) {
+            KnowledgeSubTab.Catalog -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFFF8F8F8))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    BasicTextField(
+                        value = search,
+                        onValueChange = { search = it },
+                        textStyle = LocalTextStyle.current.copy(color = InkBlack, fontSize = 14.sp),
+                        cursorBrush = SolidColor(InkBlack),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (search.isBlank()) {
+                        Text("Search topics...", color = SoftMuted, fontSize = 14.sp)
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                if (filteredCatalog.isEmpty()) {
+                    Text(
+                        text = if (catalog.isEmpty()) "No catalog items loaded. Tap Catalog." else "No results for \"$search\".",
+                        color = SoftMuted,
+                        fontSize = 13.sp
+                    )
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                        items(filteredCatalog, key = { it.id }) { pack ->
+                            val installed = packs.any { it.id == pack.id }
+                            AvailablePackRow(
+                                pack = pack,
+                                installed = installed,
+                                installing = installingIds.contains(pack.id),
+                                onInstall = { viewModel.installPack(pack.id) }
+                            )
+                            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(FaintRule))
+                        }
+                    }
+                }
+            }
+            KnowledgeSubTab.Installed -> {
+                if (packs.isEmpty()) {
+                    Text(
+                        text = "No installed modules yet.",
+                        color = SoftMuted,
+                        fontSize = 13.sp
+                    )
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                        items(packs, key = { it.id }) { pack ->
+                            PackRow(
+                                pack = pack,
+                                deleting = deletingIds.contains(pack.id),
+                                onDelete = { viewModel.deletePack(pack.id) }
+                            )
+                            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(FaintRule))
+                        }
+                    }
                 }
             }
         }
@@ -381,44 +515,69 @@ private fun KnowledgePanel(viewModel: ChatViewModel) {
 }
 
 @Composable
-private fun EmptyPacksHint() {
-    Column(
+private fun AvailablePackRow(
+    pack: RemotePack,
+    installed: Boolean,
+    installing: Boolean,
+    onInstall: () -> Unit
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(
-            text = "How to install a pack",
-            color = InkBlack,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        Text(
-            text = "1. Build a pack ZIP with the Knowledge Factory:\n" +
-                "   cd backend/factory && npm run build <topic-id>",
-            color = MaterialTheme.colorScheme.onSurface,
-            fontSize = 13.sp,
-            lineHeight = 18.sp
-        )
-        Text(
-            text = "2. Push it onto the device:\n" +
-                "   adb push out/<topic>.zip /sdcard/Android/data/com.offgrid.android/files/packs/",
-            color = MaterialTheme.colorScheme.onSurface,
-            fontSize = 13.sp,
-            lineHeight = 18.sp
-        )
-        Text(
-            text = "3. Tap Refresh. The app auto-imports the pack and chat answers will cite [Source: …] from it.",
-            color = MaterialTheme.colorScheme.onSurface,
-            fontSize = 13.sp,
-            lineHeight = 18.sp
-        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = pack.title,
+                color = InkBlack,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "${pack.tags.joinToString(" · ")} · ${formatSize(pack.sizeBytes)}",
+                color = SoftMuted,
+                fontSize = 12.sp
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    when {
+                        installed -> Color(0xFFEFEFEF)
+                        installing -> Color(0xFFDCDCDC)
+                        else -> Color(0xFF111111)
+                    }
+                )
+                .clickable(enabled = !installed && !installing, onClick = onInstall)
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = when {
+                    installed -> "Installed"
+                    installing -> "Installing..."
+                    else -> "Install"
+                },
+                color = if (installed || installing) SoftMuted else Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
     }
 }
 
 @Composable
-private fun PackRow(pack: KnowledgePack) {
+private fun PackRow(
+    pack: KnowledgePack,
+    deleting: Boolean,
+    onDelete: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -461,6 +620,25 @@ private fun PackRow(pack: KnowledgePack) {
             color = SoftMuted,
             fontSize = 12.sp
         )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (deleting) Color(0xFFE8E8E8) else Color(0xFFF2F2F2))
+                    .clickable(enabled = !deleting, onClick = onDelete)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = if (deleting) "Deleting..." else "Delete",
+                    color = if (deleting) SoftMuted else InkBlack,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
     }
 }
 

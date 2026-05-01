@@ -22,6 +22,10 @@ class MainActivity : ComponentActivity() {
         val viewModel = ChatViewModel(
             modelManager = ExecutorchModelManager(appContext = applicationContext),
             packStore = packStore,
+            workerPackRepository = WorkerPackRepository(
+                context = applicationContext,
+                baseUrl = "https://offgrid-api.adithyanmadhu1234.workers.dev"
+            ),
             retriever = HybridRetriever(packStore),
             answerCache = QueryAnswerCache()
         )

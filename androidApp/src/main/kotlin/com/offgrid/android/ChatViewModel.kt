@@ -22,6 +22,7 @@ import java.util.UUID
 class ChatViewModel(
     private val modelManager: ModelManager,
     private val packStore: KnowledgePackStore,
+    private val workerPackRepository: WorkerPackRepository,
     private val retriever: HybridRetriever,
     private val answerCache: QueryAnswerCache
 ) : ViewModel() {
@@ -33,6 +34,14 @@ class ChatViewModel(
 
     private val _isRefreshingPacks = MutableStateFlow(false)
     val isRefreshingPacks: StateFlow<Boolean> = _isRefreshingPacks.asStateFlow()
+    private val _availablePacks = MutableStateFlow<List<RemotePack>>(emptyList())
+    val availablePacks: StateFlow<List<RemotePack>> = _availablePacks.asStateFlow()
+    private val _isRefreshingCatalog = MutableStateFlow(false)
+    val isRefreshingCatalog: StateFlow<Boolean> = _isRefreshingCatalog.asStateFlow()
+    private val _installingPackIds = MutableStateFlow<Set<String>>(emptySet())
+    val installingPackIds: StateFlow<Set<String>> = _installingPackIds.asStateFlow()
+    private val _deletingPackIds = MutableStateFlow<Set<String>>(emptySet())
+    val deletingPackIds: StateFlow<Set<String>> = _deletingPackIds.asStateFlow()
 
     private var generationJob: Job? = null
 
@@ -44,6 +53,7 @@ class ChatViewModel(
             }
         }
         refreshPacks()
+        refreshCatalog()
     }
 
     fun sendMessage(text: String) {
@@ -141,6 +151,54 @@ class ChatViewModel(
                 _uiState.update { it.copy(error = "Pack refresh failed: ${t.message}") }
             } finally {
                 _isRefreshingPacks.value = false
+            }
+        }
+    }
+
+    fun refreshCatalog() {
+        if (_isRefreshingCatalog.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isRefreshingCatalog.value = true
+            try {
+                _availablePacks.value = workerPackRepository.listPacks()
+            } catch (t: Throwable) {
+                _uiState.update { it.copy(error = "Catalog refresh failed: ${t.message}") }
+            } finally {
+                _isRefreshingCatalog.value = false
+            }
+        }
+    }
+
+    fun installPack(packId: String) {
+        val pack = _availablePacks.value.firstOrNull { it.id == packId } ?: return
+        if (_installingPackIds.value.contains(packId)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _installingPackIds.update { it + packId }
+            try {
+                workerPackRepository.installPack(pack)
+                packStore.refresh()
+            } catch (t: Throwable) {
+                _uiState.update { it.copy(error = "Pack install failed: ${t.message}") }
+            } finally {
+                _installingPackIds.update { it - packId }
+            }
+        }
+    }
+
+    fun deletePack(packId: String) {
+        if (packId.isBlank()) return
+        if (_deletingPackIds.value.contains(packId)) return
+        viewModelScope.launch {
+            _deletingPackIds.update { it + packId }
+            try {
+                val deleted = packStore.delete(packId)
+                if (!deleted) {
+                    _uiState.update { it.copy(error = "Pack not found: $packId") }
+                }
+            } catch (t: Throwable) {
+                _uiState.update { it.copy(error = "Pack delete failed: ${t.message}") }
+            } finally {
+                _deletingPackIds.update { it - packId }
             }
         }
     }
