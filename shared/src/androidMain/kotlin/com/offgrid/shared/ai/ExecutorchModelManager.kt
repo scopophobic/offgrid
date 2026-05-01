@@ -18,7 +18,7 @@ class ExecutorchModelManager(
     private val tokenizerFilePathOverride: String? = null,
     private val modelExternalFileName: String = "model.pte",
     private val tokenizerExternalFileName: String = "tokenizer.json",
-    private val generationConfig: GenerationConfig = GenerationConfig(maxNewTokens = 40),
+    private val generationConfig: GenerationConfig = GenerationConfig(maxNewTokens = 384),
     private val temperature: Float = 0.1f
 ) : ModelManager {
     private var module: LlmModule? = null
@@ -84,8 +84,7 @@ class ExecutorchModelManager(
 
                 if (
                     containsStopSequence(generatedText.toString()) ||
-                    isRepetitiveLoop(normalizedText) ||
-                    exceedsSafeLength(normalizedText)
+                    isRepetitiveLoop(normalizedText)
                 ) {
                     finished.set(true)
                     isGenerationStopped.set(true)
@@ -104,8 +103,8 @@ class ExecutorchModelManager(
                 LlmGenerationConfig.create()
                     .maxNewTokens(generationConfig.maxNewTokens)
                     // seqLen is maximum total tokens (prompt + generation).
-                    // Keep it modest for stability on mobile.
-                    .seqLen(192)
+                    // 1024 leaves comfortable room for retrieved RAG context.
+                    .seqLen(1024)
                     .echo(false)
                     .temperature(temperature)
                     .build()
@@ -177,17 +176,10 @@ class ExecutorchModelManager(
 
     private fun formatAsChatPrompt(userPrompt: String): String {
         return buildString {
-            // BOS token for this model/export.
             append("<|endoftext|>")
             append("<|im_start|>system\n")
-            append(
-                "You are Offgrid, a helpful offline assistant. " +
-                    "Reply with one short, direct answer. " +
-                    "Do not invent follow-up questions. " +
-                    "Do not repeat yourself. " +
-                    "If the user says hello or hi, greet them briefly and ask how you can help.\n"
-            )
-            append("<|im_end|>\n")
+            append(SYSTEM_PROMPT)
+            append("\n<|im_end|>\n")
             append("<|im_start|>user\n")
             append(userPrompt.trim())
             append("\n<|im_end|>\n")
@@ -207,8 +199,11 @@ class ExecutorchModelManager(
     }
 
     private fun normalizeGeneratedText(rawText: String): String {
-        val withoutThink = stripThinkingSections(rawText)
-        val withoutStops = truncateAtStopSequence(withoutThink)
+        val withoutThinkBlocks = rawText.replace(THINK_BLOCK_REGEX, "")
+        val withoutThinkTags = withoutThinkBlocks
+            .replace("<think>", "")
+            .replace("</think>", "")
+        val withoutStops = truncateAtStopSequence(withoutThinkTags)
         val withoutRoleMarkers = withoutStops
             .replace("<|endoftext|>", "")
             .replace("<|im_start|>assistant", "")
@@ -221,7 +216,50 @@ class ExecutorchModelManager(
             .replace(Regex("\\n{3,}"), "\n\n")
             .trim()
 
-        return trimAfterFirstQuestionBlock(compactWhitespace)
+        val withoutMonologueParagraphs = dropMonologueParagraphs(compactWhitespace)
+        val withoutLineNarration = removeReasoningNarration(withoutMonologueParagraphs)
+        val trimmedLeadingJunk = trimLeadingJunk(withoutLineNarration)
+        return trimAfterFirstQuestionBlock(trimmedLeadingJunk)
+    }
+
+    private fun dropMonologueParagraphs(text: String): String {
+        if (text.isBlank()) return text
+        val paragraphs = text.split(Regex("\\n{2,}"))
+        val keep = mutableListOf<String>()
+        var seenRealContent = false
+        for (paragraph in paragraphs) {
+            val trimmed = paragraph.trim()
+            if (trimmed.isEmpty()) continue
+            val isMonologue = !seenRealContent && looksLikeMonologue(trimmed)
+            if (isMonologue) continue
+            keep += trimmed
+            seenRealContent = true
+        }
+        return keep.joinToString("\n\n")
+    }
+
+    private fun looksLikeMonologue(paragraph: String): Boolean {
+        val lower = paragraph.lowercase()
+        if (MONOLOGUE_SIGNALS.any { lower.contains(it) }) return true
+        val firstChar = paragraph.firstOrNull() ?: return false
+        if (firstChar.isLowerCase() && paragraph.length < 240) {
+            // A short fragment that doesn't even start with a capital is almost
+            // always residual narration when followed by a real reply.
+            return MONOLOGUE_SIGNALS_LOOSE.any { lower.contains(it) }
+        }
+        return false
+    }
+
+    private fun trimLeadingJunk(text: String): String {
+        if (text.isEmpty()) return text
+        var start = 0
+        while (start < text.length) {
+            val ch = text[start]
+            if (ch.isLetterOrDigit() || ch == '"' || ch == '\'') break
+            start++
+        }
+        if (start == 0) return text
+        return text.substring(start)
     }
 
     private fun trimAfterFirstQuestionBlock(text: String): String {
@@ -261,10 +299,6 @@ class ExecutorchModelManager(
             repeatedTailCount(text, 16) >= 3
     }
 
-    private fun exceedsSafeLength(text: String): Boolean {
-        return text.length >= 700 || text.count { it == '\n' } >= 14
-    }
-
     private fun repeatedTailCount(text: String, unit: Int): Int {
         if (text.length < unit * 2) return 1
         val tail = text.takeLast(unit)
@@ -278,14 +312,81 @@ class ExecutorchModelManager(
         return count
     }
 
+    private fun removeReasoningNarration(text: String): String {
+        var cleaned = text
+        val patterns = listOf(
+            "(?i)\\bokay,?\\s*the user[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\blet me\\s+(think|see|check|consider)[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\bfrom the context[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\bi need to[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\bi should[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\bbased on the (context|provided)[^.?!\\n]*[.?!]?\\s*"
+        )
+        patterns.forEach { pattern ->
+            cleaned = cleaned.replace(Regex(pattern), "")
+        }
+        return cleaned.trim()
+    }
+
     private companion object {
+        const val SYSTEM_PROMPT =
+            "You are Offgrid, a practical offline assistant on the user's phone. " +
+                "Answer concisely in plain language, using lists or steps when useful. " +
+                "Ground answers in any context provided. " +
+                "If you don't know something, say so."
+
         val STOP_SEQUENCES = listOf("<|im_end|>", "<|endoftext|>", "<|im_start|>")
         val GREETING_INPUTS = setOf("hello", "hi", "hey", "hello!", "hi!", "hey!")
-    } 
 
-    private fun stripThinkingSections(text: String): String {
-        val withoutTagged = text.replace(Regex("(?is)<think>.*?</think>"), " ")
-        val thinkStart = withoutTagged.indexOf("<think>", ignoreCase = true)
-        return if (thinkStart >= 0) withoutTagged.substring(0, thinkStart) else withoutTagged
+        val THINK_BLOCK_REGEX = Regex(
+            pattern = "<think>[\\s\\S]*?</think>",
+            options = setOf(RegexOption.IGNORE_CASE)
+        )
+
+        // Phrases that indicate the model is monologuing about *how* it should
+        // respond (echoing the system prompt, narrating its own plan, etc).
+        // Keep lowercase, no anchors. A first paragraph containing any of these
+        // is dropped wholesale; the actual answer that follows is preserved.
+        val MONOLOGUE_SIGNALS = listOf(
+            "no local knowledge",
+            "local knowledge",
+            "keep it simple",
+            "leep it simple",
+            "no tags",
+            "no repeats",
+            "no repetition",
+            "friendly greeting",
+            "the user is",
+            "the user wants",
+            "the user said",
+            "the user asked",
+            "user just said",
+            "let me think",
+            "let me consider",
+            "i should ",
+            "i need to ",
+            "as an ai",
+            "as a language model",
+            "my job is",
+            "my task is",
+            "based on the context",
+            "based on the provided",
+            "from the context",
+            "first, ",
+            "alright, ",
+            "alright. ",
+            "okay, ",
+            "okay. "
+        )
+
+        // Looser signals: only used for short, lowercase-starting paragraphs
+        // (typical of mid-sentence reasoning the model leaks before recovering).
+        val MONOLOGUE_SIGNALS_LOOSE = listOf(
+            "user",
+            "should",
+            "need to",
+            "let me",
+            "okay"
+        )
     }
 }

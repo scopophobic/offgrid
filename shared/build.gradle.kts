@@ -14,6 +14,7 @@ kotlin {
         val commonMain by getting {
             dependencies {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+                implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
             }
         }
         val androidMain by getting {
