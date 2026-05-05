@@ -1,13 +1,15 @@
 package com.offgrid.android
 
 import android.content.Context
+import com.offgrid.shared.knowledge.androidPacksRoot
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
 data class RemotePack(
@@ -24,64 +26,96 @@ class WorkerPackRepository(
     private val context: Context,
     private val baseUrl: String
 ) {
-    private val packsRoot: File by lazy {
-        File(context.getExternalFilesDir(null), "packs").apply { mkdirs() }
-    }
+    private val packsRoot: File by lazy { androidPacksRoot(context) }
+
+    /** Short reads (catalog + download JSON). */
+    private val jsonClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(25, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(25, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
+
+    /** Large binary ZIP from R2. */
+    private val zipClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(300, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
 
     fun listPacks(): List<RemotePack> {
-        val url = URL("$baseUrl/v1/packs")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 15_000
-            readTimeout = 20_000
-        }
-        conn.inputStream.bufferedReader().use { reader ->
-            val body = reader.readText()
-            val root = JSONObject(body)
-            val arr = root.optJSONArray("packs") ?: JSONArray()
-            return (0 until arr.length()).mapNotNull { idx ->
-                val o = arr.optJSONObject(idx) ?: return@mapNotNull null
-                RemotePack(
-                    id = o.optString("id"),
-                    title = o.optString("title"),
-                    description = o.optString("description"),
-                    version = o.optString("version"),
-                    sizeBytes = o.optLong("sizeBytes"),
-                    checksumSha256 = o.optString("checksumSha256"),
-                    tags = parseTags(o.optJSONArray("tags"))
-                )
-            }
+        val url = "$baseUrl/v1/packs"
+        val body = getJsonOrThrow(jsonClient, url, "GET /v1/packs")
+        val root = JSONObject(body)
+        val arr = root.optJSONArray("packs") ?: JSONArray()
+        return (0 until arr.length()).mapNotNull { idx ->
+            val o = arr.optJSONObject(idx) ?: return@mapNotNull null
+            RemotePack(
+                id = o.optString("id"),
+                title = o.optString("title"),
+                description = o.optString("description"),
+                version = o.optString("version"),
+                sizeBytes = o.optLong("sizeBytes"),
+                checksumSha256 = o.optString("checksumSha256"),
+                tags = parseTags(o.optJSONArray("tags"))
+            )
         }
     }
 
     /**
-     * Download a pack from Worker and persist it to `<external>/packs/<id>.zip`.
+     * Download a pack from Worker and persist it to `<packs>/<id>.zip`.
      * Verifies SHA-256 before replacing existing file.
      */
     fun installPack(pack: RemotePack) {
         val download = getDownloadInfo(pack.id)
         val downloadUrl = absolutize(download.url)
+        if (downloadUrl.isBlank()) {
+            throw IllegalStateException("Empty downloadUrl from server for ${pack.id}")
+        }
         val expectedSha = download.checksumSha256.ifBlank { pack.checksumSha256 }.lowercase()
         val target = File(packsRoot, "${pack.id}.zip")
         val temp = File(packsRoot, "${pack.id}.zip.tmp")
         if (temp.exists()) temp.delete()
 
-        val conn = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 20_000
-            readTimeout = 120_000
+        val req = Request.Builder()
+            .url(downloadUrl)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept-Encoding", "identity")
+            .get()
+            .build()
+
+        zipClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val err = resp.body?.string().orEmpty()
+                throw IllegalStateException(
+                    "GET pack zip failed: HTTP ${resp.code} ${resp.message} url=$downloadUrl err=$err".trim()
+                )
+            }
+            val stream = resp.body?.byteStream()
+                ?: throw IllegalStateException("No response body for zip: $downloadUrl")
+            stream.use { input ->
+                FileOutputStream(temp).use { output -> input.copyTo(output) }
+            }
         }
-        conn.inputStream.use { input ->
-            FileOutputStream(temp).use { output -> input.copyTo(output) }
+
+        if (!looksLikeZip(temp)) {
+            val hint = sniffFailureHint(temp)
+            temp.delete()
+            throw IllegalStateException(
+                "Download is not a ZIP at $downloadUrl ($hint). Worker may be OK; check URL and device network."
+            )
         }
         val actualSha = sha256Hex(temp)
         if (expectedSha.isNotBlank() && actualSha.lowercase() != expectedSha) {
-            // Backward compatibility: older published metadata used manifest
-            // content hash, not ZIP hash. Accept if the manifest hash matches.
             val manifestSha = readManifestShaFromZip(temp)
             if (manifestSha == null || manifestSha.lowercase() != expectedSha) {
                 temp.delete()
-                throw IllegalStateException("Checksum mismatch for ${pack.id}")
+                throw IllegalStateException(
+                    "Checksum mismatch for ${pack.id}: file=$actualSha expectedKV=$expectedSha"
+                )
             }
         }
         if (target.exists()) target.delete()
@@ -92,17 +126,59 @@ class WorkerPackRepository(
     }
 
     private fun getDownloadInfo(packId: String): DownloadInfo {
-        val conn = (URL("$baseUrl/v1/packs/$packId/download").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 15_000
-            readTimeout = 20_000
+        val url = "$baseUrl/v1/packs/$packId/download"
+        val body = getJsonOrThrow(jsonClient, url, "GET /v1/packs/$packId/download")
+        val o = JSONObject(body)
+        return DownloadInfo(
+            url = o.optString("downloadUrl"),
+            checksumSha256 = o.optString("checksumSha256")
+        )
+    }
+
+    private fun getJsonOrThrow(client: OkHttpClient, url: String, label: String): String {
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept-Encoding", "identity")
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                throw IllegalStateException("$label failed: HTTP ${resp.code} ${resp.message} $text".trim())
+            }
+            if (text.isBlank()) {
+                throw IllegalStateException("$label: empty body")
+            }
+            return text
         }
-        conn.inputStream.bufferedReader().use { reader ->
-            val o = JSONObject(reader.readText())
-            return DownloadInfo(
-                url = o.optString("downloadUrl"),
-                checksumSha256 = o.optString("checksumSha256")
-            )
+    }
+
+    private fun looksLikeZip(file: File): Boolean {
+        if (!file.exists() || file.length() < 4) return false
+        file.inputStream().use { input ->
+            val sig = ByteArray(4)
+            val n = input.read(sig)
+            if (n < 4) return false
+            return sig[0] == 'P'.code.toByte() && sig[1] == 'K'.code.toByte()
+        }
+    }
+
+    private fun sniffFailureHint(file: File): String {
+        if (!file.exists() || file.length() == 0L) return "empty file"
+        val nBytes = minOf(256L, file.length()).toInt()
+        val buf = ByteArray(nBytes)
+        val read = file.inputStream().use { it.read(buf) }
+        val prefix = if (read <= 0) {
+            ""
+        } else {
+            buf.decodeToString(0, read, throwOnInvalidSequence = false)
+        }
+        val trimmed = prefix.trimStart()
+        return when {
+            trimmed.startsWith("{") || trimmed.startsWith("[") -> "body looks like JSON/HTML, not binary zip"
+            trimmed.startsWith("<") -> "body looks like HTML/XML"
+            else -> "len=${file.length()} head=${prefix.take(80).replace('\n', ' ')}"
         }
     }
 
@@ -147,5 +223,8 @@ class WorkerPackRepository(
         val url: String,
         val checksumSha256: String
     )
-}
 
+    private companion object {
+        private const val USER_AGENT = "Offgrid/1.0 (Android; okhttp)"
+    }
+}

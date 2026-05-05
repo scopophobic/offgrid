@@ -9,6 +9,7 @@ import com.offgrid.shared.knowledge.KnowledgePackStore
 import com.offgrid.shared.models.AppResult
 import com.offgrid.shared.models.ChatMessage
 import com.offgrid.shared.models.ChatUiState
+import com.offgrid.shared.models.ModelBootstrapUiState
 import com.offgrid.shared.rag.QueryAnswerCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,12 +24,16 @@ class ChatViewModel(
     private val modelManager: ModelManager,
     private val packStore: KnowledgePackStore,
     private val workerPackRepository: WorkerPackRepository,
+    private val modelFilesRepository: ModelFilesRepository,
     private val retriever: HybridRetriever,
     private val answerCache: QueryAnswerCache
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    private val _modelBootstrapUi = MutableStateFlow<ModelBootstrapUiState>(ModelBootstrapUiState.Checking)
+    val modelBootstrapUi: StateFlow<ModelBootstrapUiState> = _modelBootstrapUi.asStateFlow()
 
     val installedPacks: StateFlow<List<KnowledgePack>> = packStore.installed()
 
@@ -46,17 +51,48 @@ class ChatViewModel(
     private var generationJob: Job? = null
 
     init {
-        viewModelScope.launch {
-            when (val result = modelManager.loadModel()) {
-                is AppResult.Success -> Unit
-                is AppResult.Error -> _uiState.update { it.copy(error = result.message) }
-            }
-        }
         refreshPacks()
         refreshCatalog()
+        runModelBootstrap()
+    }
+
+    fun retryModelBootstrap() {
+        runModelBootstrap()
+    }
+
+    private fun runModelBootstrap() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _modelBootstrapUi.value = ModelBootstrapUiState.Checking
+            try {
+                val ensure = modelFilesRepository.ensureModelArtifacts { phase, rec, tot ->
+                    _modelBootstrapUi.value =
+                        ModelBootstrapUiState.Downloading(phase, rec, tot)
+                }
+                when (ensure) {
+                    is ModelFilesRepository.EnsureResult.Failed -> {
+                        _modelBootstrapUi.value =
+                            ModelBootstrapUiState.Failed(ensure.message)
+                        return@launch
+                    }
+                    ModelFilesRepository.EnsureResult.NoManifest,
+                    ModelFilesRepository.EnsureResult.Ready -> Unit
+                }
+                when (val loaded = modelManager.loadModel()) {
+                    is AppResult.Success ->
+                        _modelBootstrapUi.value = ModelBootstrapUiState.Ready
+                    is AppResult.Error ->
+                        _modelBootstrapUi.value =
+                            ModelBootstrapUiState.Failed(loaded.message)
+                }
+            } catch (t: Throwable) {
+                _modelBootstrapUi.value =
+                    ModelBootstrapUiState.Failed(t.message ?: "Model bootstrap failed")
+            }
+        }
     }
 
     fun sendMessage(text: String) {
+        if (_modelBootstrapUi.value !is ModelBootstrapUiState.Ready) return
         if (text.isBlank() || _uiState.value.isLoading) return
 
         val userMessage = ChatMessage(
@@ -103,10 +139,26 @@ class ChatViewModel(
                 }
                 val finalAnswer =
                     _uiState.value.messages.firstOrNull { it.id == responseId }?.text.orEmpty()
-                if (finalAnswer.isNotBlank()) {
+                if (finalAnswer.isBlank()) {
+                    val hint =
+                        "No text came back from the model. If this keeps happening, check that " +
+                            "model.pte and tokenizer.json are valid on device (downloaded or assets), " +
+                            "and try Logcat for ExecuTorch / native errors."
+                    _uiState.update { state ->
+                        val updated = state.messages.map { msg ->
+                            if (msg.id == responseId) msg.copy(text = hint) else msg
+                        }
+                        state.copy(
+                            isLoading = false,
+                            isRetrieving = false,
+                            messages = updated,
+                            error = hint
+                        )
+                    }
+                } else {
                     answerCache.put(text, finalAnswer)
+                    _uiState.update { it.copy(isLoading = false, isRetrieving = false) }
                 }
-                _uiState.update { it.copy(isLoading = false, isRetrieving = false) }
             } catch (t: Throwable) {
                 _uiState.update {
                     it.copy(
@@ -170,13 +222,26 @@ class ChatViewModel(
     }
 
     fun installPack(packId: String) {
-        val pack = _availablePacks.value.firstOrNull { it.id == packId } ?: return
+        val pack = _availablePacks.value.firstOrNull { it.id == packId }
+        if (pack == null) {
+            _uiState.update {
+                it.copy(error = "Pack \"$packId\" not in catalog. Open Knowledge and tap Catalog to refresh.")
+            }
+            return
+        }
         if (_installingPackIds.value.contains(packId)) return
         viewModelScope.launch(Dispatchers.IO) {
             _installingPackIds.update { it + packId }
             try {
                 workerPackRepository.installPack(pack)
                 packStore.refresh()
+                if (!packStore.hasInstalledPack(pack.id)) {
+                    _uiState.update {
+                        it.copy(
+                            error = "Saved ${pack.id}.zip but on-device import failed. Run: adb logcat -s PackImporter PackStore"
+                        )
+                    }
+                }
             } catch (t: Throwable) {
                 _uiState.update { it.copy(error = "Pack install failed: ${t.message}") }
             } finally {

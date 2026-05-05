@@ -21,16 +21,18 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,17 +44,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.offgrid.shared.knowledge.KnowledgePack
+import com.offgrid.shared.models.ModelBootstrapUiState
 
 private val InkBlack = Color(0xFF111111)
 private val SoftMuted = Color(0xFF888888)
 private val FaintRule = Color(0xFFEAEAEA)
 private val UserBubble = Color(0xFFF2F2F2)
-private val MascotPurple = Color(0xFF8E7BFF)
 
 private enum class AppPage { Chat, Knowledge }
 private enum class KnowledgeSubTab { Catalog, Installed }
@@ -60,36 +66,185 @@ private enum class KnowledgeSubTab { Catalog, Installed }
 @Composable
 fun OffgridApp(viewModel: ChatViewModel) {
     var currentPage by rememberSaveable { mutableStateOf(AppPage.Chat) }
+    val modelUi by viewModel.modelBootstrapUi.collectAsStateWithLifecycle()
+    val chatReady = modelUi is ModelBootstrapUiState.Ready
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.White)
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text(
-            text = "Offgrid",
-            color = InkBlack,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        TabBar(
-            current = currentPage,
-            onSelect = { currentPage = it }
-        )
-        when (currentPage) {
-            AppPage.Chat -> ChatPanel(viewModel = viewModel)
-            AppPage.Knowledge -> KnowledgePanel(viewModel = viewModel)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.White)
+                .padding(horizontal = 20.dp)
+                .padding(top = 16.dp)
+        ) {
+            ModelBootstrapBanner(
+                state = modelUi,
+                onRetry = { viewModel.retryModelBootstrap() }
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+            ) {
+                Text(
+                    text = "Offgrid",
+                    modifier = Modifier.align(Alignment.Center),
+                    color = InkBlack,
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            when (currentPage) {
+                AppPage.Chat -> ChatPanel(
+                    viewModel = viewModel,
+                    chatEnabled = chatReady,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                )
+                AppPage.Knowledge -> KnowledgePanel(
+                    viewModel = viewModel,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                )
+            }
+            NavigationBar(
+                modifier = Modifier.navigationBarsPadding(),
+                containerColor = Color.White,
+                tonalElevation = 0.dp
+            ) {
+                NavigationBarItem(
+                    selected = currentPage == AppPage.Chat,
+                    onClick = { currentPage = AppPage.Chat },
+                    icon = { Icon(Icons.Filled.Chat, contentDescription = null) },
+                    label = { Text("Chat") },
+                    colors = NavigationBarItemDefaults.colors(
+                        indicatorColor = Color.Transparent,
+                        selectedIconColor = InkBlack,
+                        selectedTextColor = InkBlack,
+                        unselectedIconColor = SoftMuted,
+                        unselectedTextColor = SoftMuted
+                    )
+                )
+                NavigationBarItem(
+                    selected = currentPage == AppPage.Knowledge,
+                    onClick = { currentPage = AppPage.Knowledge },
+                    icon = { Icon(Icons.Filled.MenuBook, contentDescription = null) },
+                    label = { Text("Knowledge") },
+                    colors = NavigationBarItemDefaults.colors(
+                        indicatorColor = Color.Transparent,
+                        selectedIconColor = InkBlack,
+                        selectedTextColor = InkBlack,
+                        unselectedIconColor = SoftMuted,
+                        unselectedTextColor = SoftMuted
+                    )
+                )
+            }
+        }
+
+        // Block only Chat with overlay; Knowledge (pack download/install) must work
+        // while model files download in background.
+        val blockChatForModel =
+            currentPage == AppPage.Chat &&
+                (modelUi is ModelBootstrapUiState.Checking ||
+                    modelUi is ModelBootstrapUiState.Downloading)
+        if (blockChatForModel) {
+            ModelBootstrapFullscreenOverlay(
+                state = modelUi,
+                onRetry = { viewModel.retryModelBootstrap() }
+            )
         }
     }
 }
 
 @Composable
-private fun TabBar(current: AppPage, onSelect: (AppPage) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-        TabLabel("Chat", current == AppPage.Chat) { onSelect(AppPage.Chat) }
-        TabLabel("Knowledge", current == AppPage.Knowledge) { onSelect(AppPage.Knowledge) }
+private fun ModelBootstrapBanner(
+    state: ModelBootstrapUiState,
+    onRetry: () -> Unit
+) {
+    if (state !is ModelBootstrapUiState.Failed) return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+    ) {
+        Text(
+            text = state.message,
+            color = Color(0xFFB00020),
+            fontSize = 13.sp
+        )
+        TextButton(onClick = onRetry) {
+            Text("Retry model download", color = InkBlack)
+        }
+        Text(
+            text = "Knowledge tab: packs still install. Chat needs the LLM.",
+            color = SoftMuted,
+            fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
+private fun ModelBootstrapFullscreenOverlay(
+    state: ModelBootstrapUiState,
+    onRetry: () -> Unit
+) {
+    when (state) {
+        ModelBootstrapUiState.Ready,
+        is ModelBootstrapUiState.Failed -> return
+
+        ModelBootstrapUiState.Checking -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(color = InkBlack)
+                    Text("Preparing model…", color = SoftMuted, fontSize = 14.sp)
+                }
+            }
+        }
+
+        is ModelBootstrapUiState.Downloading -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(state.label, color = InkBlack, fontSize = 15.sp)
+                    if (state.bytesTotal > 0L) {
+                        val p = (state.bytesReceived.toFloat() / state.bytesTotal.toFloat())
+                            .coerceIn(0f, 1f)
+                        LinearProgressIndicator(
+                            progress = { p },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            "${state.bytesReceived / 1024} KiB / ${state.bytesTotal / 1024} KiB",
+                            color = SoftMuted,
+                            fontSize = 12.sp
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("Downloading…", color = SoftMuted, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -116,12 +271,15 @@ private fun TabLabel(text: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ChatPanel(viewModel: ChatViewModel) {
+private fun ChatPanel(
+    viewModel: ChatViewModel,
+    chatEnabled: Boolean,
+    modifier: Modifier = Modifier
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val packs by viewModel.installedPacks.collectAsStateWithLifecycle()
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
-    val mascotActive = uiState.isLoading || uiState.isRetrieving
 
     LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text?.length) {
         if (uiState.messages.isNotEmpty()) {
@@ -130,10 +288,11 @@ private fun ChatPanel(viewModel: ChatViewModel) {
     }
 
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxWidth()
+            .fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        MascotRow(active = mascotActive)
         if (uiState.messages.isEmpty()) {
             EmptyChatHint(packCount = packs.size)
         }
@@ -165,6 +324,7 @@ private fun ChatPanel(viewModel: ChatViewModel) {
             input = input,
             onInputChange = { input = it },
             isLoading = uiState.isLoading,
+            chatEnabled = chatEnabled,
             onSend = {
                 if (input.isNotBlank()) {
                     viewModel.sendMessage(input)
@@ -239,7 +399,7 @@ private fun AssistantMessageRow(text: String) {
             letterSpacing = 1.5.sp
         )
         Text(
-            text = text.ifBlank { "…" },
+            text = assistantTextToAnnotated(text.ifBlank { "…" }),
             color = InkBlack,
             fontSize = 15.sp,
             lineHeight = 22.sp
@@ -279,6 +439,7 @@ private fun InputRow(
     input: String,
     onInputChange: (String) -> Unit,
     isLoading: Boolean,
+    chatEnabled: Boolean,
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -300,7 +461,7 @@ private fun InputRow(
                 BasicTextField(
                     value = input,
                     onValueChange = onInputChange,
-                    enabled = !isLoading,
+                    enabled = chatEnabled && !isLoading,
                     cursorBrush = SolidColor(InkBlack),
                     textStyle = LocalTextStyle.current.copy(
                         color = InkBlack,
@@ -321,51 +482,61 @@ private fun InputRow(
             }
             PillButton(
                 label = if (isLoading) "Stop" else "Send",
-                onClick = if (isLoading) onStop else onSend
+                onClick = if (isLoading) onStop else onSend,
+                enabled = chatEnabled || isLoading
             )
         }
     }
 }
 
-@Composable
-private fun MascotRow(active: Boolean) {
-    val transition = rememberInfiniteTransition(label = "mascot")
-    val pulse by transition.animateFloat(
-        initialValue = 0.75f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 900, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse"
-    )
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .width(28.dp)
-                .height(28.dp)
-                .clip(CircleShape)
-                .background(MascotPurple.copy(alpha = if (active) pulse else 0.4f))
-        )
-        Text(
-            text = if (active) "Mascot is thinking..." else "Mascot is idle",
-            color = SoftMuted,
-            fontSize = 12.sp
-        )
+private fun assistantTextToAnnotated(raw: String): AnnotatedString {
+    val text = raw.replace(Regex("```[\\s\\S]*?```"), "").trim()
+    return buildAnnotatedString {
+        var i = 0
+        while (i < text.length) {
+            val lineStart = i == 0 || text[i - 1] == '\n'
+            if (lineStart && text.startsWith("### ", i)) {
+                val end = text.indexOf('\n', i)
+                val endIdx = if (end < 0) text.length else end
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp)) {
+                    append(text.substring(i + 4, endIdx).trim())
+                }
+                if (end >= 0) append('\n')
+                i = if (end < 0) text.length else end + 1
+                continue
+            }
+            if (lineStart && (text.startsWith("- ", i) || text.startsWith("* ", i))) {
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append("• ") }
+                i += 2
+                continue
+            }
+            if (text.startsWith("**", i)) {
+                val end = text.indexOf("**", i + 2)
+                if (end > i + 2) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(text.substring(i + 2, end))
+                    }
+                    i = end + 2
+                    continue
+                }
+            }
+            append(text[i])
+            i++
+        }
     }
 }
 
 @Composable
-private fun PillButton(label: String, onClick: () -> Unit) {
+private fun PillButton(
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true
+) {
     Box(
         modifier = Modifier
             .clip(CircleShape)
-            .background(InkBlack)
-            .clickable(onClick = onClick)
+            .background(if (enabled) InkBlack else Color(0xFFCCCCCC))
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 9.dp)
     ) {
         Text(
@@ -378,7 +549,10 @@ private fun PillButton(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun KnowledgePanel(viewModel: ChatViewModel) {
+private fun KnowledgePanel(
+    viewModel: ChatViewModel,
+    modifier: Modifier = Modifier
+) {
     val packs by viewModel.installedPacks.collectAsStateWithLifecycle()
     val refreshing by viewModel.isRefreshingPacks.collectAsStateWithLifecycle()
     val catalog by viewModel.availablePacks.collectAsStateWithLifecycle()
@@ -387,6 +561,11 @@ private fun KnowledgePanel(viewModel: ChatViewModel) {
     val deletingIds by viewModel.deletingPackIds.collectAsStateWithLifecycle()
     var subTab by rememberSaveable { mutableStateOf(KnowledgeSubTab.Catalog) }
     var search by rememberSaveable { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshCatalog()
+        viewModel.refreshPacks()
+    }
     val filteredCatalog = catalog.filter { pack ->
         val q = search.trim().lowercase()
         if (q.isEmpty()) true else {
@@ -397,42 +576,22 @@ private fun KnowledgePanel(viewModel: ChatViewModel) {
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxHeight()
-            .fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = "Knowledge Packs",
-                    color = InkBlack,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = if (packs.isEmpty()) {
-                        "No installed modules yet."
-                    } else {
-                        "${packs.size} installed · used to ground chat answers."
-                    },
-                    color = SoftMuted,
-                    fontSize = 13.sp
-                )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            PillButton(
-                label = if (refreshingCatalog) "Loading..." else "Catalog",
-                onClick = { if (!refreshingCatalog) viewModel.refreshCatalog() }
-            )
-            PillButton(
-                label = if (refreshing) "Scanning" else "Refresh",
-                onClick = { if (!refreshing) viewModel.refreshPacks() }
+        Text(
+            text = "Knowledge Packs",
+            color = InkBlack,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        if (refreshingCatalog || refreshing) {
+            Text(
+                text = "Syncing catalog and installed packs…",
+                color = SoftMuted,
+                fontSize = 12.sp
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -471,12 +630,21 @@ private fun KnowledgePanel(viewModel: ChatViewModel) {
                 Spacer(Modifier.height(6.dp))
                 if (filteredCatalog.isEmpty()) {
                     Text(
-                        text = if (catalog.isEmpty()) "No catalog items loaded. Tap Catalog." else "No results for \"$search\".",
+                        text = if (catalog.isEmpty()) {
+                            if (refreshingCatalog) "Loading catalog…" else "No catalog items (check error message above or network)."
+                        } else {
+                            "No results for \"$search\"."
+                        },
                         color = SoftMuted,
                         fontSize = 13.sp
                     )
                 } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f, fill = true)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                    ) {
                         items(filteredCatalog, key = { it.id }) { pack ->
                             val installed = packs.any { it.id == pack.id }
                             AvailablePackRow(
@@ -498,7 +666,12 @@ private fun KnowledgePanel(viewModel: ChatViewModel) {
                         fontSize = 13.sp
                     )
                 } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f, fill = true)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                    ) {
                         items(packs, key = { it.id }) { pack ->
                             PackRow(
                                 pack = pack,

@@ -4,6 +4,10 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val offgridApiBaseUrl = (
+    project.findProperty("OFFGRID_API_BASE_URL") as String?
+    )?.trim()?.ifEmpty { null } ?: "https://offgrid-api.adithyanmadhu1234.workers.dev"
+
 android {
     namespace = "com.offgrid.android"
     compileSdk = 35
@@ -14,10 +18,16 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField(
+            "String",
+            "OFFGRID_API_BASE_URL",
+            "\"$offgridApiBaseUrl\""
+        )
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -47,9 +57,13 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.foundation:foundation")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // Official Maven Central artifact per ExecuTorch Android docs.
     implementation("org.pytorch:executorch-android:1.1.0")
+
+    // Pack catalog + ZIP download (more reliable on-device than HttpURLConnection).
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

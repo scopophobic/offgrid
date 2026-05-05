@@ -19,12 +19,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         packStore = AndroidKnowledgePackStore(applicationContext)
+        val apiBase = BuildConfig.OFFGRID_API_BASE_URL
         val viewModel = ChatViewModel(
             modelManager = ExecutorchModelManager(appContext = applicationContext),
             packStore = packStore,
             workerPackRepository = WorkerPackRepository(
                 context = applicationContext,
-                baseUrl = "https://offgrid-api.adithyanmadhu1234.workers.dev"
+                baseUrl = apiBase
+            ),
+            modelFilesRepository = ModelFilesRepository(
+                context = applicationContext,
+                baseUrl = apiBase
             ),
             retriever = HybridRetriever(packStore),
             answerCache = QueryAnswerCache()
