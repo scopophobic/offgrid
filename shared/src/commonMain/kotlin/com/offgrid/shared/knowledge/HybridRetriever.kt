@@ -15,7 +15,9 @@ package com.offgrid.shared.knowledge
  */
 class HybridRetriever(
     private val store: KnowledgePackStore,
-    private val topK: Int = 4
+    private val topK: Int = 4,
+    private val maxContextChars: Int = 2800,
+    private val maxChunkChars: Int = 800
 ) {
 
     suspend fun buildPrompt(userQuery: String): String {
@@ -23,14 +25,25 @@ class HybridRetriever(
         if (trimmed.isEmpty()) return trimmed
         val chunks = store.search(trimmed, topK)
         if (chunks.isEmpty()) return trimmed
-        val context = chunks.joinToString("\n\n") { c ->
+        val contextParts = mutableListOf<String>()
+        var used = 0
+        for (c in chunks) {
             val location = if (c.sectionPath.isNotBlank() && c.sectionPath != "Introduction") {
                 "${c.sourceLabel} > ${c.sectionPath}"
             } else {
                 c.sourceLabel
             }
-            "[Source: $location]\n${c.text}"
+            val text = c.text
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .take(maxChunkChars)
+            val part = "[Source: $location]\n$text"
+            if (used + part.length > maxContextChars && contextParts.isNotEmpty()) break
+            contextParts += part
+            used += part.length
+            if (used >= maxContextChars) break
         }
+        val context = contextParts.joinToString("\n\n")
         return buildString {
             append("Context:\n")
             append(context)

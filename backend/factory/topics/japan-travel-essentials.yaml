@@ -1,0 +1,28 @@
+id: japan-travel-essentials
+title: "Japan Travel Essentials"
+description: "Practical, offline-friendly notes for visiting Japan: transit, etiquette, food, and key destinations."
+tags:
+  - travel
+  - japan
+  - guide
+sources:
+  - kind: wikipedia
+    titles:
+      - "Tourism in Japan"
+      - "Rail transport in Japan"
+      - "Etiquette in Japan"
+      - "Japanese cuisine"
+      - "Tokyo"
+      - "Kyoto"
+      - "Osaka"
+    follow_links:
+      max_per_article: 2
+      keyword_filters:
+        - travel
+        - station
+        - district
+        - cuisine
+        - shrine
+        - temple
+maxChunks: 1200
+maxBytes: 6291456

@@ -33,6 +33,8 @@ class ModelFilesRepository(
 
     private val destDir: File
         get() = context.getExternalFilesDir(null) ?: context.filesDir
+    @Volatile
+    private var ensureInProgress: Boolean = false
 
     /** Same layout as adb push / ExecuTorchModelManager external resolution. */
     fun modelDest(): File = File(destDir, MODEL_NAME)
@@ -55,6 +57,13 @@ class ModelFilesRepository(
     fun ensureModelArtifacts(
         onProgress: (phase: String, bytesReceived: Long, bytesTotal: Long) -> Unit
     ): EnsureResult {
+        synchronized(this) {
+            if (ensureInProgress) {
+                return EnsureResult.Failed("Model download already in progress")
+            }
+            ensureInProgress = true
+        }
+        try {
         val manifestUrl = "${baseUrl.trimEnd('/')}/v1/model/manifest"
         val manifestBody = try {
             getJsonIfPresent(manifestUrl) ?: return EnsureResult.NoManifest
@@ -119,6 +128,11 @@ class ModelFilesRepository(
         } catch (e: Exception) {
             EnsureResult.Failed(e.message ?: e::class.simpleName ?: "model download failed")
         }
+        } finally {
+            synchronized(this) {
+                ensureInProgress = false
+            }
+        }
     }
 
     private fun getJsonIfPresent(url: String): String? {
@@ -146,35 +160,51 @@ class ModelFilesRepository(
         expectedSha: String,
         onProgress: (Long, Long) -> Unit
     ) {
-        val req = Request.Builder()
+        // Resume support: keep one fixed .tmp file and request remaining bytes.
+        val already = if (temp.exists()) temp.length() else 0L
+        val reqBuilder = Request.Builder()
             .url(url)
             .header("User-Agent", USER_AGENT)
             .header("Accept-Encoding", "identity")
-            .get()
-            .build()
-        http.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) {
-                val err = resp.body?.string().orEmpty()
-                throw IllegalStateException("GET failed HTTP ${resp.code} url=$url $err")
-            }
-            val body = resp.body ?: throw IllegalStateException("No body for $url")
-            val total = body.contentLength().takeIf { it >= 0 } ?: -1L
-            val digest = MessageDigest.getInstance("SHA-256")
-            body.byteStream().use { input ->
-                FileOutputStream(temp).use { output ->
-                    val buf = ByteArray(8192)
-                    var received = 0L
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n <= 0) break
-                        digest.update(buf, 0, n)
-                        output.write(buf, 0, n)
-                        received += n
+        if (already > 0L) {
+            reqBuilder.header("Range", "bytes=$already-")
+        }
+        val req = reqBuilder.get().build()
+
+        try {
+            http.newCall(req).execute().use { resp ->
+                if (!(resp.isSuccessful || resp.code == 206)) {
+                    val err = resp.body?.string().orEmpty()
+                    throw IllegalStateException("GET failed HTTP ${resp.code} url=$url $err")
+                }
+                val body = resp.body ?: throw IllegalStateException("No body for $url")
+
+                val append = already > 0L && resp.code == 206
+                if (already > 0L && !append) {
+                    // Server did not honor Range; restart from zero.
+                    temp.delete()
+                }
+                val startAt = if (append) already else 0L
+                val totalFromServer = body.contentLength().takeIf { it >= 0 } ?: -1L
+                val total = if (append && totalFromServer > 0L) startAt + totalFromServer else totalFromServer
+
+                body.byteStream().use { input ->
+                    FileOutputStream(temp, append).use { output ->
+                        val buf = ByteArray(8192)
+                        var received = startAt
                         onProgress(received, total)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n <= 0) break
+                            output.write(buf, 0, n)
+                            received += n
+                            onProgress(received, total)
+                        }
                     }
                 }
             }
-            val actual = digest.digest().joinToString("") { b -> "%02x".format(b) }
+
+            val actual = sha256Hex(temp)
             if (!actual.equals(expectedSha, ignoreCase = true)) {
                 temp.delete()
                 throw IllegalStateException(
@@ -185,9 +215,10 @@ class ModelFilesRepository(
             if (!temp.renameTo(dest)) {
                 temp.copyTo(dest, overwrite = true)
                 temp.delete()
-            } else {
-                // renameTo succeeded; temp is gone
             }
+        } catch (t: Throwable) {
+            // Keep temp for future resume on transient network failures.
+            throw t
         }
     }
 

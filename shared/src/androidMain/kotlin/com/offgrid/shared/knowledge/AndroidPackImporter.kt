@@ -13,13 +13,14 @@ import java.util.zip.ZipInputStream
  *
  *   <packsRoot>/<id>/manifest.json   (raw, copied from ZIP)
  *   <packsRoot>/<id>/sources.json    (raw, copied from ZIP)
- *   <packsRoot>/<id>/chunks.db       (SQLite + FTS5, built from chunks.jsonl)
+ *   <packsRoot>/<id>/chunks.db       (SQLite + FTS5 or FTS4, built from chunks.jsonl)
  *   <packsRoot>/<id>/embeddings.f32  (raw, kept for future on-device retrieval)
  *   <packsRoot>/<id>/.imported       (sentinel: import succeeded)
  *
  * Idempotent: if `.imported` exists for a pack id, [importIfNeeded] is a no-op.
  *
- * Phase 2 keeps things simple: lexical BM25 only (FTS5). The embeddings.f32
+ * Phase 2: lexical search (FTS5 BM25 when available; FTS4 + token overlap on
+ * builds without FTS5, e.g. some emulators). The embeddings.f32
  * file is preserved on disk so a Phase 3 hybrid retriever can plug in without
  * re-importing.
  */
@@ -155,7 +156,24 @@ class AndroidPackImporter(private val packsRoot: File) {
             )
             """.trimIndent()
         )
-        db.execSQL("CREATE VIRTUAL TABLE chunks USING fts5(text)")
+        val useFts5 = systemSupportsFts5
+        if (useFts5) {
+            db.execSQL("CREATE VIRTUAL TABLE chunks USING fts5(text)")
+        } else {
+            // Some emulator / device SQLite builds omit FTS5; FTS4 is widely available.
+            db.execSQL(
+                "CREATE VIRTUAL TABLE chunks USING fts4(text, tokenize=unicode61)"
+            )
+        }
+        db.execSQL(
+            """
+            CREATE TABLE _fts_cfg (
+                mode TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+        val mode = if (useFts5) "5" else "4"
+        db.execSQL("INSERT INTO _fts_cfg(mode) VALUES('$mode')")
     }
 
     private fun insertSources(db: SQLiteDatabase, sourcesJson: String) {
@@ -253,6 +271,22 @@ class AndroidPackImporter(private val packsRoot: File) {
     companion object {
         private const val TAG = "PackImporter"
         const val IMPORTED_SENTINEL = ".imported"
+
+        /** True when this process's SQLite can create FTS5 virtual tables (not true on all AVDs). */
+        private val systemSupportsFts5: Boolean by lazy {
+            try {
+                val mem = SQLiteDatabase.openOrCreateDatabase(":memory:", null)
+                try {
+                    mem.execSQL("CREATE VIRTUAL TABLE _probe USING fts5(x)")
+                    mem.execSQL("DROP TABLE _probe")
+                    true
+                } finally {
+                    mem.close()
+                }
+            } catch (_: Throwable) {
+                false
+            }
+        }
         private val ALLOWED_ENTRIES = setOf(
             "manifest.json",
             "chunks.jsonl",

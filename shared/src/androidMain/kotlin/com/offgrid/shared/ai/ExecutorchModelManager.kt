@@ -1,6 +1,7 @@
 package com.offgrid.shared.ai
 
 import android.content.Context
+import android.util.Log
 import com.offgrid.shared.models.AppResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -62,7 +63,9 @@ class ExecutorchModelManager(
             return@callbackFlow
         }
 
-        buildHeuristicReply(prompt.trim())?.let { heuristic ->
+        // RAG wraps as "Context: ...\n\nQuestion: <user>"; heuristics must use <user> only.
+        val queryForHeuristic = userFacingQueryFromPrompt(prompt)
+        buildHeuristicReply(queryForHeuristic)?.let { heuristic ->
             trySend(heuristic)
             close()
             return@callbackFlow
@@ -103,8 +106,8 @@ class ExecutorchModelManager(
                 LlmGenerationConfig.create()
                     .maxNewTokens(generationConfig.maxNewTokens)
                     // seqLen is maximum total tokens (prompt + generation).
-                    // 1024 leaves comfortable room for retrieved RAG context.
-                    .seqLen(1024)
+                    // RAG context + chat template can exceed 1024 — native gen then yields nothing.
+                    .seqLen(2048)
                     .echo(false)
                     .temperature(temperature)
                     .build()
@@ -187,6 +190,15 @@ class ExecutorchModelManager(
         }
     }
 
+    /**
+     * Last line after [HybridRetriever]'s `Question:` marker, or whole prompt if absent.
+     */
+    private fun userFacingQueryFromPrompt(prompt: String): String {
+        val marker = "\n\nQuestion: "
+        val idx = prompt.lastIndexOf(marker)
+        return if (idx >= 0) prompt.substring(idx + marker.length).trim() else prompt.trim()
+    }
+
     private fun buildHeuristicReply(userPrompt: String): String? {
         val normalized = userPrompt.lowercase().trim()
         if (normalized in GREETING_INPUTS) {
@@ -219,7 +231,29 @@ class ExecutorchModelManager(
         val withoutMonologueParagraphs = dropMonologueParagraphs(compactWhitespace)
         val withoutLineNarration = removeReasoningNarration(withoutMonologueParagraphs)
         val trimmedLeadingJunk = trimLeadingJunk(withoutLineNarration)
-        return trimAfterFirstQuestionBlock(trimmedLeadingJunk)
+        val trimmed = trimAfterFirstQuestionBlock(trimmedLeadingJunk)
+        if (trimmed.isBlank() && compactWhitespace.isNotBlank()) {
+            Log.w(
+                TAG,
+                "normalize stripped all visible text; falling back to light cleanup"
+            )
+            return lightCleanupFallback(compactWhitespace)
+        }
+        return trimmed
+    }
+
+    /** When aggressive filters remove everything, keep role markers / stops stripped only. */
+    private fun lightCleanupFallback(text: String): String {
+        val noThink = text.replace(THINK_BLOCK_REGEX, "")
+            .replace("<think>", "")
+            .replace("</think>", "")
+        return truncateAtStopSequence(noThink)
+            .replace("<|endoftext|>", "")
+            .replace("<|im_start|>assistant", "")
+            .replace("<|im_start|>user", "")
+            .replace("<|im_start|>system", "")
+            .replace("<|im_end|>", "")
+            .trim()
     }
 
     private fun dropMonologueParagraphs(text: String): String {
@@ -240,14 +274,8 @@ class ExecutorchModelManager(
 
     private fun looksLikeMonologue(paragraph: String): Boolean {
         val lower = paragraph.lowercase()
-        if (MONOLOGUE_SIGNALS.any { lower.contains(it) }) return true
-        val firstChar = paragraph.firstOrNull() ?: return false
-        if (firstChar.isLowerCase() && paragraph.length < 240) {
-            // A short fragment that doesn't even start with a capital is almost
-            // always residual narration when followed by a real reply.
-            return MONOLOGUE_SIGNALS_LOOSE.any { lower.contains(it) }
-        }
-        return false
+        // Avoid substring matches like "okay"/"user" on real answers (they nuked short replies).
+        return MONOLOGUE_SIGNALS.any { lower.contains(it) }
     }
 
     private fun trimLeadingJunk(text: String): String {
@@ -316,10 +344,14 @@ class ExecutorchModelManager(
         var cleaned = text
         val patterns = listOf(
             "(?i)\\bokay,?\\s*the user[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\bokay,?[^.?!\\n]{0,120}?applications[^.?!\\n]*[.?!]?\\s*",
             "(?i)\\blet me\\s+(think|see|check|consider)[^.?!\\n]*[.?!]?\\s*",
             "(?i)\\bfrom the context[^.?!\\n]*[.?!]?\\s*",
             "(?i)\\bi need to[^.?!\\n]*[.?!]?\\s*",
             "(?i)\\bi should[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\bmake sure (the )?answer[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\bkeep (each point|it brief)[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\bavoid (any )?technical[^.?!\\n]*[.?!]?\\s*",
             "(?i)\\bbased on the (context|provided)[^.?!\\n]*[.?!]?\\s*"
         )
         patterns.forEach { pattern ->
@@ -329,13 +361,20 @@ class ExecutorchModelManager(
     }
 
     private companion object {
+        private const val TAG = "ExecuTorchModel"
+
         const val SYSTEM_PROMPT =
             "You are Offgrid, a practical offline assistant on the user's phone. " +
                 "Answer concisely in plain language, using lists or steps when useful. " +
                 "Ground answers in any context provided. " +
-                "If you don't know something, say so."
+                "If you don't know something, say so. " +
+                "You may reason internally in terse fragments (like short notes), but NEVER print " +
+                "plans, meta-commentary, 'I should…', 'the user wants…', checklists about how you will answer, " +
+                "or instructions to yourself. Output ONLY the final reply the user should read."
 
-        val STOP_SEQUENCES = listOf("<|im_end|>", "<|endoftext|>", "<|im_start|>")
+        // Do not stop on "<|im_start|>" because some models emit "<|im_start|>assistant"
+        // before actual text; truncating there drops the whole answer.
+        val STOP_SEQUENCES = listOf("<|im_end|>", "<|endoftext|>")
         val GREETING_INPUTS = setOf("hello", "hi", "hey", "hello!", "hi!", "hey!")
 
         val THINK_BLOCK_REGEX = Regex(
@@ -350,12 +389,19 @@ class ExecutorchModelManager(
         val MONOLOGUE_SIGNALS = listOf(
             "no local knowledge",
             "local knowledge",
+            "keep each point",
+            "keep it brief",
             "keep it simple",
             "leep it simple",
             "no tags",
             "no repeats",
             "no repetition",
             "friendly greeting",
+            "avoid any technical",
+            "make sure the answer",
+            "might be interested",
+            "user might be",
+            "user could be",
             "the user is",
             "the user wants",
             "the user said",
@@ -369,24 +415,16 @@ class ExecutorchModelManager(
             "as a language model",
             "my job is",
             "my task is",
-            "based on the context",
-            "based on the provided",
-            "from the context",
-            "first, ",
-            "alright, ",
-            "alright. ",
-            "okay, ",
-            "okay. "
-        )
-
-        // Looser signals: only used for short, lowercase-starting paragraphs
-        // (typical of mid-sentence reasoning the model leaks before recovering).
-        val MONOLOGUE_SIGNALS_LOOSE = listOf(
-            "user",
-            "should",
-            "need to",
-            "let me",
-            "okay"
+            // Do not match normal answers that ground in RAG ("based on the sources…")
+            // or polite openings ("Okay, here are…"); those were nuking whole paragraphs.
+            "based on the provided context only",
+            "based on the provided information only",
+            "from the context above only",
+            "from the provided context only",
+            "let me outline how i'll answer",
+            "let me structure",
+            "step one:",
+            "step 1:"
         )
     }
 }

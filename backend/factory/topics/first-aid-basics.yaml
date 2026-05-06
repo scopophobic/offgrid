@@ -1,0 +1,28 @@
+id: first-aid-basics
+title: "First Aid Basics"
+description: "Reference notes for common first-aid situations: CPR, wounds, burns, choking, shock. Not a substitute for professional medical care."
+tags:
+  - first-aid
+  - safety
+  - medical
+sources:
+  - kind: wikipedia
+    titles:
+      - "First aid"
+      - "Cardiopulmonary resuscitation"
+      - "Wound"
+      - "Burn"
+      - "Choking"
+      - "Shock (circulatory)"
+      - "Recovery position"
+      - "Heat exhaustion"
+      - "Hypothermia"
+    follow_links:
+      max_per_article: 1
+      keyword_filters:
+        - aid
+        - emergency
+        - treatment
+        - injury
+maxChunks: 1000
+maxBytes: 5242880

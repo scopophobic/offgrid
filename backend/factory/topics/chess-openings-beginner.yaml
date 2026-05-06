@@ -1,0 +1,26 @@
+id: chess-openings-beginner
+title: "Chess Openings (Beginner)"
+description: "Core principles and common starter lines for new chess players."
+tags:
+  - chess
+  - openings
+  - beginner
+sources:
+  - kind: wikipedia
+    titles:
+      - "Chess opening"
+      - "Italian Game"
+      - "Queen's Gambit"
+      - "Ruy Lopez"
+      - "Caro-Kann Defence"
+    follow_links:
+      max_per_article: 3
+      keyword_filters:
+        - principle
+        - tactic
+        - common
+        - opening
+        - defence
+        - defense
+maxChunks: 1500
+maxBytes: 8388608

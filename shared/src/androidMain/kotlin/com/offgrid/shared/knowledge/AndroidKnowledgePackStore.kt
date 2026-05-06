@@ -31,8 +31,7 @@ class AndroidKnowledgePackStore(
     context: Context
 ) : KnowledgePackStore {
 
-    private val packsRoot: File =
-        File(context.getExternalFilesDir(null), PACKS_SUBDIR).apply { mkdirs() }
+    private val packsRoot: File = androidPacksRoot(context)
     private val importer = AndroidPackImporter(packsRoot)
 
     private val _installed = MutableStateFlow<List<KnowledgePack>>(emptyList())
@@ -44,6 +43,10 @@ class AndroidKnowledgePackStore(
 
     override suspend fun refresh() = mutex.withLock {
         withContext(Dispatchers.IO) { refreshLocked() }
+    }
+
+    override suspend fun hasInstalledPack(packId: String): Boolean = mutex.withLock {
+        _installed.value.any { it.id == packId }
     }
 
     override suspend fun search(query: String, topK: Int): List<RetrievedChunk> {
@@ -190,6 +193,35 @@ class AndroidKnowledgePackStore(
         ftsQuery: String,
         topK: Int
     ): List<RowFromDb> {
+        val useFts5 = readFtsMode(db)
+        if (!useFts5) {
+            val cap = (topK * 25).coerceAtMost(500)
+            val sql = """
+                SELECT cm.source_id, cm.section_path, c.text
+                FROM chunks c
+                JOIN chunk_meta cm ON cm.rowid = c.rowid
+                WHERE chunks MATCH ?
+                LIMIT ?
+            """.trimIndent()
+            val cursor = db.rawQuery(sql, arrayOf(ftsQuery, cap.toString()))
+            val rows = mutableListOf<RowFromDb>()
+            cursor.use {
+                while (it.moveToNext()) {
+                    val text = it.getString(2) ?: ""
+                    rows += RowFromDb(
+                        sourceId = it.getString(0),
+                        sectionPath = it.getString(1) ?: "",
+                        text = text,
+                        score = fts4TokenOverlapScore(text, ftsQuery)
+                    )
+                }
+            }
+            if (rows.isEmpty()) {
+                Log.d(TAG, "no hits in $packId for query: $ftsQuery")
+            }
+            return rows.sortedBy { it.score }.take(topK)
+        }
+
         val sql = """
             SELECT cm.source_id, cm.section_path, c.text, bm25(chunks) AS score
             FROM chunks c
@@ -215,6 +247,48 @@ class AndroidKnowledgePackStore(
             Log.d(TAG, "no hits in $packId for query: $ftsQuery")
         }
         return rows
+    }
+
+    private fun readFtsMode(db: SQLiteDatabase): Boolean {
+        try {
+            db.rawQuery("SELECT mode FROM _fts_cfg LIMIT 1", null).use { c ->
+                if (c.moveToFirst()) {
+                    return c.getString(0) == "5"
+                }
+            }
+        } catch (_: Throwable) {
+            // Older DBs: infer from sqlite_master.
+        }
+        return try {
+            db.rawQuery(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'",
+                null
+            ).use { c ->
+                c.moveToFirst() && (c.getString(0)?.contains("fts5", ignoreCase = true) == true)
+            }
+        } catch (_: Throwable) {
+            true
+        }
+    }
+
+    /** Lower (more negative) = more token hits — aligns sort direction with bm25(). */
+    private fun fts4TokenOverlapScore(text: String, ftsQuery: String): Double {
+        val terms = ftsQuery.split(Regex("\\s+OR\\s+", RegexOption.IGNORE_CASE))
+            .map { it.trim().removeSurrounding("\"").lowercase() }
+            .filter { it.length > 2 }
+        if (terms.isEmpty()) return 0.0
+        val hay = text.lowercase()
+        var hits = 0
+        for (t in terms) {
+            var from = 0
+            while (true) {
+                val idx = hay.indexOf(t, from)
+                if (idx < 0) break
+                hits++
+                from = idx + t.length
+            }
+        }
+        return -hits.toDouble()
     }
 
     private fun sourceTitlesFor(packId: String): Map<String, String> {
@@ -262,7 +336,6 @@ class AndroidKnowledgePackStore(
 
     companion object {
         private const val TAG = "PackStore"
-        private const val PACKS_SUBDIR = "packs"
         private val STOPWORDS = setOf(
             "the", "and", "for", "with", "that", "this", "are", "was", "but",
             "you", "your", "what", "which", "who", "how", "why", "when", "where",

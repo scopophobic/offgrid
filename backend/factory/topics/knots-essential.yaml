@@ -1,0 +1,28 @@
+id: knots-essential
+title: "Essential Knots"
+description: "Common knots for camping, climbing, sailing, and everyday use, with their typical applications and limits."
+tags:
+  - knots
+  - outdoors
+  - skills
+sources:
+  - kind: wikipedia
+    titles:
+      - "Knot"
+      - "List of knots"
+      - "Bowline"
+      - "Clove hitch"
+      - "Figure-eight knot"
+      - "Square knot"
+      - "Sheet bend"
+      - "Taut-line hitch"
+      - "Trucker's hitch"
+    follow_links:
+      max_per_article: 1
+      keyword_filters:
+        - knot
+        - hitch
+        - bend
+        - loop
+maxChunks: 700
+maxBytes: 3145728

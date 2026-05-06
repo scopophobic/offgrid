@@ -26,6 +26,9 @@ interface KnowledgePackStore {
      */
     suspend fun refresh()
 
+    /** True if [packId] is in the last refreshed installed list (under store lock). */
+    suspend fun hasInstalledPack(packId: String): Boolean
+
     /**
      * Top-K chunks across all installed packs. Implementations should rank by
      * BM25 (or equivalent) and return at most [topK] results. Returns an empty

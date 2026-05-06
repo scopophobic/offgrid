@@ -1,0 +1,11 @@
+{
+  "version":"qwen3-1.7b-hf-v2",
+  "model":{
+    "downloadUrl":"https://huggingface.co/scopophobic/offgrid-models/resolve/main/qwen-3-1.7B/model.pte?download=true",
+    "checksumSha256":"074d87c3cba37ed89ea968201f847b37a5a7d92461a477bad650e28aab188296"
+  },
+  "tokenizer":{
+    "downloadUrl":"https://huggingface.co/scopophobic/offgrid-models/resolve/main/qwen-3-1.7B/tokenizer.json?download=true",
+    "checksumSha256":"aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+  }
+}

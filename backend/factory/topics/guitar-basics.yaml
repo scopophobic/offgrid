@@ -1,0 +1,26 @@
+id: guitar-basics
+title: "Guitar Basics"
+description: "Beginner chords, strumming, and practice guidance for acoustic and electric guitar."
+tags:
+  - guitar
+  - music
+  - beginner
+sources:
+  - kind: wikipedia
+    titles:
+      - "Guitar"
+      - "Guitar chord"
+      - "Strumming"
+      - "Open chord"
+      - "Barre chord"
+      - "Fingerstyle guitar"
+    follow_links:
+      max_per_article: 2
+      keyword_filters:
+        - chord
+        - finger
+        - strum
+        - tuning
+        - beginner
+maxChunks: 800
+maxBytes: 4194304

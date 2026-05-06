@@ -1,0 +1,11 @@
+name = "offgrid-api"
+main = "src/index.ts"
+compatibility_date = "2026-04-29"
+
+[[r2_buckets]]
+binding = "PACKS_R2"
+bucket_name = "offgrid-packs"
+
+[[kv_namespaces]]
+binding = "PACKS_REGISTRY"
+id ="206f68a098da4ea1a17e0a015c2b0416"
