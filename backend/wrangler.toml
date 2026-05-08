@@ -6,6 +6,8 @@ compatibility_date = "2026-04-29"
 binding = "PACKS_R2"
 bucket_name = "offgrid-packs"
 
+# KV keys: pack:* (topic packs), model:manifest (legacy single LLM),
+# model:catalog (multi-model UI; example JSON in model-catalog.example.json).
 [[kv_namespaces]]
 binding = "PACKS_REGISTRY"
 id ="206f68a098da4ea1a17e0a015c2b0416"
