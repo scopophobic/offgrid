@@ -1,27 +1,68 @@
 {
-    "models": [
-      {
-        "id": "qwen3-1.7b",
-        "displayName": "Qwen3 1.7B",
-        "description": "Default on-device LLM; strong reasoning and RAG. ~1.2 GiB model + small tokenizer.",
-        "version": "qwen3-1.7b-hf-v2",
-        "sizeBytes": 1280000000,
-        "tags": [
-          "smart",
-          "reasoning",
-          "default"
-        ],
-        "recommendedRamMb": 4096,
-        "isDefault": true,
-        "model": {
-          "downloadUrl": "https://huggingface.co/scopophobic/offgrid-models/resolve/main/qwen-3-1.7B/model.pte?download=true",
-          "checksumSha256": "074d87c3cba37ed89ea968201f847b37a5a7d92461a477bad650e28aab188296"
-        },
-        "tokenizer": {
-          "downloadUrl": "https://huggingface.co/scopophobic/offgrid-models/resolve/main/qwen-3-1.7B/tokenizer.json?download=true",
-          "checksumSha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
-        }
+  "models": [
+    {
+      "id": "qwen3-1.7b",
+      "displayName": "Qwen3 1.7B",
+      "description": "Default on-device LLM; strong reasoning and RAG. ~1.2 GiB model + small tokenizer.",
+      "version": "qwen3-1.7b-hf-v2",
+      "sizeBytes": 1280000000,
+      "tags": [
+        "smart",
+        "reasoning",
+        "default"
+      ],
+      "recommendedRamMb": 4096,
+      "isDefault": true,
+      "model": {
+        "downloadUrl": "https://huggingface.co/scopophobic/offgrid-models/resolve/main/qwen-3-1.7B/model.pte?download=true",
+        "checksumSha256": "074d87c3cba37ed89ea968201f847b37a5a7d92461a477bad650e28aab188296"
+      },
+      "tokenizer": {
+        "downloadUrl": "https://huggingface.co/scopophobic/offgrid-models/resolve/main/qwen-3-1.7B/tokenizer.json?download=true",
+        "checksumSha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
       }
-    ]
-  }
-  
+    },
+    {
+      "id": "llama-3.2-1b",
+      "displayName": "Llama 3.2 1B Instruct",
+      "description": "Fast and lightweight on-device model from Meta. ~1.1 GiB.",
+      "version": "v1",
+      "sizeBytes": 1138135470,
+      "tags": [
+        "fast",
+        "lightweight"
+      ],
+      "recommendedRamMb": 3072,
+      "isDefault": false,
+      "model": {
+        "downloadUrl": "https://huggingface.co/scopophobic/offgrid-models/resolve/main/Llama-3.2-1B-Instruct-SpinQuant_INT4_EO8-ET/model.pte?download=true",
+        "checksumSha256": "8715cdba9e91f6bede00cc5f2d6b12397b95225da5630c4972a8da03001cda3b"
+      },
+      "tokenizer": {
+        "downloadUrl": "https://huggingface.co/scopophobic/offgrid-models/resolve/main/Llama-3.2-1B-Instruct-SpinQuant_INT4_EO8-ET/tokenizer.model?download=true",
+        "checksumSha256": "82e9d31979e92ab929cd544440f129d9ecd797b69e327f80f17e1c50d5551b55"
+      }
+    },
+    {
+      "id": "smollm2-135m",
+      "displayName": "SmolLM2 135M",
+      "description": "Ultra-tiny model for low-end devices. ~540 MiB.",
+      "version": "v1",
+      "sizeBytes": 544952732,
+      "tags": [
+        "tiny",
+        "low-memory"
+      ],
+      "recommendedRamMb": 2048,
+      "isDefault": false,
+      "model": {
+        "downloadUrl": "https://huggingface.co/scopophobic/offgrid-models/resolve/main/SmolLM2-135M/model.pte?download=true",
+        "checksumSha256": "ed9f393aadff548ab8ab12bc6afb6b66a7538bf009a132306270abd509761bb5"
+      },
+      "tokenizer": {
+        "downloadUrl": "https://huggingface.co/scopophobic/offgrid-models/resolve/main/SmolLM2-135M/tokenizer.json?download=true",
+        "checksumSha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c"
+      }
+    }
+  ]
+}

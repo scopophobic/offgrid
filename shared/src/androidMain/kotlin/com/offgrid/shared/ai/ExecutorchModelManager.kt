@@ -3,6 +3,7 @@ package com.offgrid.shared.ai
 import android.content.Context
 import android.util.Log
 import com.offgrid.shared.models.AppResult
+import com.offgrid.shared.models.ChatTurn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import org.pytorch.executorch.extension.llm.LlmCallback
@@ -19,7 +20,6 @@ class ExecutorchModelManager(
     private val tokenizerFilePathOverride: String? = null,
     private val modelExternalFileName: String = "model.pte",
     private val tokenizerExternalFileName: String = "tokenizer.json",
-    private val generationConfig: GenerationConfig = GenerationConfig(maxNewTokens = 384),
     private val temperature: Float = 0.1f
 ) : ModelManager {
     private var module: LlmModule? = null
@@ -48,7 +48,10 @@ class ExecutorchModelManager(
         }
     }
 
-    override fun streamResponse(prompt: String): Flow<String> = callbackFlow {
+    override fun streamResponse(prompt: String): Flow<String> =
+        streamResponse(prompt, emptyList())
+
+    override fun streamResponse(prompt: String, history: List<ChatTurn>): Flow<String> = callbackFlow {
         val activeModule = module
         isGenerationStopped.set(false)
         if (activeModule == null) {
@@ -102,17 +105,16 @@ class ExecutorchModelManager(
         }
 
         try {
+            // No explicit token cap: rely on stop tokens, EOS, repetition guard, and seqLen.
+            // seqLen is total budget for prompt + generation.
             val llmConfig =
                 LlmGenerationConfig.create()
-                    .maxNewTokens(generationConfig.maxNewTokens)
-                    // seqLen is maximum total tokens (prompt + generation).
-                    // RAG context + chat template can exceed 1024 — native gen then yields nothing.
-                    .seqLen(2048)
+                    .seqLen(SEQ_LEN)
                     .echo(false)
                     .temperature(temperature)
                     .build()
 
-            activeModule.generate(formatAsChatPrompt(prompt), llmConfig, callback)
+            activeModule.generate(formatAsChatPrompt(prompt, history), llmConfig, callback)
         } catch (t: Throwable) {
             trySend("Generation failed: ${t.message ?: "unknown error"}")
         } finally {
@@ -136,6 +138,11 @@ class ExecutorchModelManager(
     }
 
     private fun resolveFile(overridePath: String?, assetPath: String): File {
+        val overrideFile = overridePath?.let { File(it) }
+        if (overrideFile != null && overrideFile.exists() && overrideFile.canRead()) {
+            return overrideFile
+        }
+
         val externalFilesDir = appContext.getExternalFilesDir(null)
         if (externalFilesDir != null) {
             val externalFile = File(externalFilesDir, assetPath.substringAfterLast("/"))
@@ -152,11 +159,7 @@ class ExecutorchModelManager(
             }
         }
 
-        val overrideFile = overridePath?.let { File(it) }
         if (overrideFile != null) {
-            if (overrideFile.exists() && overrideFile.canRead()) {
-                return overrideFile
-            }
             throw IllegalStateException(
                 "Override file is not readable: $overridePath. " +
                     "Push file to this exact path or remove override."
@@ -177,17 +180,43 @@ class ExecutorchModelManager(
         return outFile
     }
 
-    private fun formatAsChatPrompt(userPrompt: String): String {
-        return buildString {
-            append("<|endoftext|>")
-            append("<|im_start|>system\n")
-            append(SYSTEM_PROMPT)
-            append("\n<|im_end|>\n")
-            append("<|im_start|>user\n")
-            append(userPrompt.trim())
-            append("\n<|im_end|>\n")
-            append("<|im_start|>assistant\n")
+    /**
+     * Render conversation as ChatML so the model sees prior turns as proper
+     * `<|im_start|>user/assistant` blocks. Caps the rendered history by char
+     * budget so the prompt stays within [SEQ_LEN] minus generation headroom.
+     */
+    private fun formatAsChatPrompt(userPrompt: String, history: List<ChatTurn>): String {
+        val sb = StringBuilder()
+        sb.append("<|endoftext|>")
+        sb.append("<|im_start|>system\n")
+        sb.append(SYSTEM_PROMPT)
+        sb.append("\n<|im_end|>\n")
+
+        // Sliding window: keep most recent turns under HISTORY_CHAR_BUDGET.
+        val historyBlock = StringBuilder()
+        var used = 0
+        for (turn in history.asReversed()) {
+            var cleanText = turn.text.trim()
+            if (cleanText.isEmpty()) continue
+            val role = if (turn.fromUser) "user" else "assistant"
+            
+            // Truncate long assistant replies so they don't eat the entire budget
+            if (!turn.fromUser && cleanText.length > 1500) {
+                cleanText = cleanText.take(1500) + "...\n[Truncated]"
+            }
+            
+            val rendered = "<|im_start|>$role\n$cleanText\n<|im_end|>\n"
+            if (used + rendered.length > HISTORY_CHAR_BUDGET) break
+            historyBlock.insert(0, rendered)
+            used += rendered.length
         }
+        sb.append(historyBlock)
+
+        sb.append("<|im_start|>user\n")
+        sb.append(userPrompt.trim())
+        sb.append("\n<|im_end|>\n")
+        sb.append("<|im_start|>assistant\n")
+        return sb.toString()
     }
 
     /**
@@ -223,7 +252,13 @@ class ExecutorchModelManager(
             .replace("<|im_start|>system", "")
             .replace("<|im_end|>", "")
 
-        val compactWhitespace = withoutRoleMarkers
+        // Reasoning models without explicit <think> tags often start with a
+        // monologue paragraph (planning/repeating the question). If they do,
+        // skip everything before the FIRST blank-line break that separates the
+        // monologue from the actual answer.
+        val deMonologued = stripUntaggedThinking(withoutRoleMarkers)
+
+        val compactWhitespace = deMonologued
             .replace(Regex("[ \\t]+"), " ")
             .replace(Regex("\\n{3,}"), "\n\n")
             .trim()
@@ -240,6 +275,30 @@ class ExecutorchModelManager(
             return lightCleanupFallback(compactWhitespace)
         }
         return trimmed
+    }
+
+    /**
+     * Heuristic for "thinking out loud" without `<think>` tags: when the first
+     * paragraph contains classic monologue cues AND a real answer follows after
+     * a blank line, drop everything up to that blank line.
+     *
+     * We only do this once, on the first paragraph, to avoid eating real
+     * content from longer answers.
+     */
+    private fun stripUntaggedThinking(text: String): String {
+        val firstBreak = text.indexOf("\n\n")
+        if (firstBreak <= 0) return text
+        val first = text.substring(0, firstBreak)
+        val rest = text.substring(firstBreak + 2)
+        if (rest.isBlank()) return text
+        val lower = first.lowercase()
+        val cuesHit = THINKING_OUT_LOUD_CUES.count { lower.contains(it) }
+        // Require at least 1 cue AND the remainder to look like an answer
+        // (capital letter / list / heading) to avoid eating short, valid replies.
+        val nextChar = rest.trimStart().firstOrNull()
+        val nextLooksReal = nextChar != null &&
+            (nextChar.isUpperCase() || nextChar == '-' || nextChar == '#' || nextChar == '1')
+        return if (cuesHit >= 1 && nextLooksReal) rest else text
     }
 
     /** When aggressive filters remove everything, keep role markers / stops stripped only. */
@@ -345,14 +404,12 @@ class ExecutorchModelManager(
         val patterns = listOf(
             "(?i)\\bokay,?\\s*the user[^.?!\\n]*[.?!]?\\s*",
             "(?i)\\bokay,?[^.?!\\n]{0,120}?applications[^.?!\\n]*[.?!]?\\s*",
-            "(?i)\\blet me\\s+(think|see|check|consider)[^.?!\\n]*[.?!]?\\s*",
-            "(?i)\\bfrom the context[^.?!\\n]*[.?!]?\\s*",
-            "(?i)\\bi need to[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\blet me\\s+(think|see|check|consider|figure out|outline|structure)[^.?!\\n]*[.?!]?\\s*",
+            "(?i)\\bi need to figure out[^.?!\\n]*[.?!]?\\s*",
             "(?i)\\bi should[^.?!\\n]*[.?!]?\\s*",
             "(?i)\\bmake sure (the )?answer[^.?!\\n]*[.?!]?\\s*",
             "(?i)\\bkeep (each point|it brief)[^.?!\\n]*[.?!]?\\s*",
-            "(?i)\\bavoid (any )?technical[^.?!\\n]*[.?!]?\\s*",
-            "(?i)\\bbased on the (context|provided)[^.?!\\n]*[.?!]?\\s*"
+            "(?i)\\bavoid (any )?technical[^.?!\\n]*[.?!]?\\s*"
         )
         patterns.forEach { pattern ->
             cleaned = cleaned.replace(Regex(pattern), "")
@@ -363,14 +420,21 @@ class ExecutorchModelManager(
     private companion object {
         private const val TAG = "ExecuTorchModel"
 
+        // Total prompt + generation budget. RAG context (~3k chars), 4 history
+        // turns, system prompt and final answer all share this. Higher = more
+        // memory used but no truncated answers.
+        private const val SEQ_LEN = 4096
+        private const val HISTORY_CHAR_BUDGET = 8000
+
         const val SYSTEM_PROMPT =
             "You are Offgrid, a practical offline assistant on the user's phone. " +
-                "Answer concisely in plain language, using lists or steps when useful. " +
-                "Ground answers in any context provided. " +
-                "If you don't know something, say so. " +
-                "You may reason internally in terse fragments (like short notes), but NEVER print " +
-                "plans, meta-commentary, 'I should…', 'the user wants…', checklists about how you will answer, " +
-                "or instructions to yourself. Output ONLY the final reply the user should read."
+                "Answer concisely. Do NOT think out loud. Do NOT explain your reasoning, " +
+                "your plan, or what you are going to do. Do NOT restate the question. " +
+                "Do NOT write phrases like \"the user is asking\", \"let me see\", " +
+                "\"okay, the user\", \"first I need to\", or \"based on the context\". " +
+                "If a Context block is provided, ground your answer in it and cite sources " +
+                "inline as `[Source: …]` when useful. " +
+                "Output ONLY the final reply the user should read, nothing else."
 
         // Do not stop on "<|im_start|>" because some models emit "<|im_start|>assistant"
         // before actual text; truncating there drops the whole answer.
@@ -380,6 +444,28 @@ class ExecutorchModelManager(
         val THINK_BLOCK_REGEX = Regex(
             pattern = "<think>[\\s\\S]*?</think>",
             options = setOf(RegexOption.IGNORE_CASE)
+        )
+
+        // Cues that signal an opening "thinking out loud" paragraph when no
+        // <think> tag is used (Qwen-class reasoning leakage).
+        val THINKING_OUT_LOUD_CUES = listOf(
+            "okay, the user",
+            "okay, let",
+            "the user is asking",
+            "the user wants",
+            "the user provided",
+            "i need to figure out",
+            "i need to think",
+            "let me see",
+            "let me figure",
+            "let me think",
+            "let me consider",
+            "let me outline",
+            "let me structure",
+            "first, the context",
+            "first, i ",
+            "based on the context",
+            "from the context"
         )
 
         // Phrases that indicate the model is monologuing about *how* it should

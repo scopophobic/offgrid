@@ -15,9 +15,9 @@ package com.offgrid.shared.knowledge
  */
 class HybridRetriever(
     private val store: KnowledgePackStore,
-    private val topK: Int = 4,
-    private val maxContextChars: Int = 2800,
-    private val maxChunkChars: Int = 800
+    private val topK: Int = 2,
+    private val maxContextChars: Int = 3000,
+    private val maxChunkChars: Int = 1200
 ) {
 
     suspend fun buildPrompt(userQuery: String): String {

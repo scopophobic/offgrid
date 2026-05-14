@@ -21,7 +21,6 @@ class MainActivity : ComponentActivity() {
         packStore = AndroidKnowledgePackStore(applicationContext)
         val apiBase = BuildConfig.OFFGRID_API_BASE_URL
         val viewModel = ChatViewModel(
-            modelManager = ExecutorchModelManager(appContext = applicationContext),
             packStore = packStore,
             workerPackRepository = WorkerPackRepository(
                 context = applicationContext,
@@ -31,8 +30,18 @@ class MainActivity : ComponentActivity() {
                 context = applicationContext,
                 baseUrl = apiBase
             ),
+            modelCatalogRepository = ModelCatalogRepository(baseUrl = apiBase),
             retriever = HybridRetriever(packStore),
-            answerCache = QueryAnswerCache()
+            answerCache = QueryAnswerCache(),
+            // Per-model files come from ModelFilesRepository.activeModelPaths();
+            // ChatViewModel rebuilds the manager when the active model changes.
+            modelManagerFactory = { modelFile, tokenizerFile ->
+                ExecutorchModelManager(
+                    appContext = applicationContext,
+                    modelFilePathOverride = modelFile.absolutePath,
+                    tokenizerFilePathOverride = tokenizerFile.absolutePath
+                )
+            }
         )
         setContent {
             MaterialTheme(

@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,7 +61,7 @@ private val SoftMuted = Color(0xFF888888)
 private val FaintRule = Color(0xFFEAEAEA)
 private val UserBubble = Color(0xFFF2F2F2)
 
-private enum class AppPage { Chat, Knowledge }
+private enum class AppPage { Chat, Knowledge, Settings }
 private enum class KnowledgeSubTab { Catalog, Installed }
 
 @Composable
@@ -108,6 +109,12 @@ fun OffgridApp(viewModel: ChatViewModel) {
                         .weight(1f)
                         .fillMaxWidth()
                 )
+                AppPage.Settings -> SettingsPanel(
+                    viewModel = viewModel,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                )
             }
             NavigationBar(
                 modifier = Modifier.navigationBarsPadding(),
@@ -140,20 +147,43 @@ fun OffgridApp(viewModel: ChatViewModel) {
                         unselectedTextColor = SoftMuted
                     )
                 )
+                NavigationBarItem(
+                    selected = currentPage == AppPage.Settings,
+                    onClick = { currentPage = AppPage.Settings },
+                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                    label = { Text("Settings") },
+                    colors = NavigationBarItemDefaults.colors(
+                        indicatorColor = Color.Transparent,
+                        selectedIconColor = InkBlack,
+                        selectedTextColor = InkBlack,
+                        unselectedIconColor = SoftMuted,
+                        unselectedTextColor = SoftMuted
+                    )
+                )
             }
         }
 
-        // Block only Chat with overlay; Knowledge (pack download/install) must work
-        // while model files download in background.
-        val blockChatForModel =
-            currentPage == AppPage.Chat &&
-                (modelUi is ModelBootstrapUiState.Checking ||
-                    modelUi is ModelBootstrapUiState.Downloading)
-        if (blockChatForModel) {
-            ModelBootstrapFullscreenOverlay(
-                state = modelUi,
-                onRetry = { viewModel.retryModelBootstrap() }
+        // First-run picker takes the whole screen until user chooses a model.
+        if (modelUi is ModelBootstrapUiState.NeedsSelection) {
+            val freeBytes by viewModel.freeStorageBytes.collectAsStateWithLifecycle()
+            ModelPickerOverlay(
+                available = (modelUi as ModelBootstrapUiState.NeedsSelection).available,
+                freeBytes = freeBytes,
+                onPick = { viewModel.selectModel(it) }
             )
+        } else {
+            // Block only Chat with overlay; Knowledge (pack install) and
+            // Settings stay reachable while model downloads in background.
+            val blockChatForModel =
+                currentPage == AppPage.Chat &&
+                    (modelUi is ModelBootstrapUiState.Checking ||
+                        modelUi is ModelBootstrapUiState.Downloading)
+            if (blockChatForModel) {
+                ModelBootstrapFullscreenOverlay(
+                    state = modelUi,
+                    onRetry = { viewModel.retryModelBootstrap() }
+                )
+            }
         }
     }
 }
@@ -192,7 +222,8 @@ private fun ModelBootstrapFullscreenOverlay(
 ) {
     when (state) {
         ModelBootstrapUiState.Ready,
-        is ModelBootstrapUiState.Failed -> return
+        is ModelBootstrapUiState.Failed,
+        is ModelBootstrapUiState.NeedsSelection -> return
 
         ModelBootstrapUiState.Checking -> {
             Box(

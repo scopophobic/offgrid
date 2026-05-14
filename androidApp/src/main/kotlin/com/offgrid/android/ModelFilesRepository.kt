@@ -1,20 +1,28 @@
 package com.offgrid.android
 
 import android.content.Context
+import android.os.StatFs
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
- * Downloads ExecuTorch [model.pte] + [tokenizer.json] after install:
- * GET /v1/model/manifest → stream to .tmp → SHA-256 → rename into app external files dir
- * (same paths [ExecutorchModelManager] resolves).
+ * Storage layout for downloaded LLMs:
  *
- * KV key `model:manifest` on Worker; 404 = skip download (bundled assets / adb only).
+ *   <externalFilesDir>/models/<modelId>/model.pte
+ *   <externalFilesDir>/models/<modelId>/tokenizer.json
+ *   <externalFilesDir>/models/<modelId>/.version          (manifest version)
+ *
+ * Active model id stored in SharedPreferences. The active model's files are
+ * what [ExecutorchModelManager] loads via overrides (see [activeModelPaths]).
+ *
+ * Legacy single-model installs that wrote to <externalFilesDir>/model.pte
+ * are migrated to the per-id directory once when [migrateLegacyToActive]
+ * detects them — saves users a 1.2 GB redownload.
  */
 class ModelFilesRepository(
     private val context: Context,
@@ -31,18 +39,115 @@ class ModelFilesRepository(
         .followSslRedirects(true)
         .build()
 
-    private val destDir: File
+    private val rootDir: File
         get() = context.getExternalFilesDir(null) ?: context.filesDir
+
+    private val modelsRoot: File
+        get() = File(rootDir, "models").apply { mkdirs() }
+
     @Volatile
     private var ensureInProgress: Boolean = false
 
-    /** Same layout as adb push / ExecuTorchModelManager external resolution. */
-    fun modelDest(): File = File(destDir, MODEL_NAME)
-    fun tokenizerDest(): File = File(destDir, TOKENIZER_NAME)
+    fun activeModelId(): String? = prefs.getString(KEY_ACTIVE_MODEL_ID, null)
+
+    fun setActiveModelId(id: String) {
+        prefs.edit().putString(KEY_ACTIVE_MODEL_ID, id).apply()
+    }
+
+    fun modelDir(modelId: String): File =
+        File(modelsRoot, modelId).apply { mkdirs() }
+
+    fun modelFile(modelId: String): File = File(modelDir(modelId), MODEL_NAME)
+    fun tokenizerFile(modelId: String): File = File(modelDir(modelId), TOKENIZER_NAME)
+    private fun versionFile(modelId: String): File = File(modelDir(modelId), VERSION_NAME)
+
+    /** Files for the currently active model, or null if none selected. */
+    fun activeModelPaths(): Pair<File, File>? {
+        val id = activeModelId() ?: return null
+        val mf = modelFile(id)
+        val tf = tokenizerFile(id)
+        return if (mf.exists() && tf.exists()) mf to tf else null
+    }
+
+    /**
+     * Returns true if [modelId]'s files exist on disk and look complete (non-empty).
+     * Does NOT verify SHA-256 (cheap check; the cost guard in [ensureModelArtifacts]
+     * does the full hash check before any redownload).
+     */
+    fun isModelDownloaded(modelId: String): Boolean {
+        val mf = modelFile(modelId)
+        val tf = tokenizerFile(modelId)
+        return mf.exists() && tf.exists() && mf.length() > 0L && tf.length() > 0L
+    }
+
+    /** Total bytes for [modelId]'s files (model + tokenizer + meta). */
+    fun onDeviceBytes(modelId: String): Long {
+        val dir = modelDir(modelId)
+        if (!dir.exists()) return 0L
+        var total = 0L
+        dir.walkTopDown().forEach { if (it.isFile) total += it.length() }
+        return total
+    }
+
+    /** Free space on the volume that holds the app's external files dir. */
+    fun freeStorageBytes(): Long {
+        val path = rootDir.absolutePath
+        return try {
+            val stat = StatFs(path)
+            stat.availableBlocksLong * stat.blockSizeLong
+        } catch (_: Throwable) {
+            0L
+        }
+    }
+
+    /**
+     * Removes a downloaded model. Skips the active one to avoid "deleted while
+     * generating" surprises — caller should switch active first.
+     */
+    fun deleteModel(modelId: String): Boolean {
+        if (modelId == activeModelId()) return false
+        val dir = modelDir(modelId)
+        if (!dir.exists()) return false
+        return dir.deleteRecursively()
+    }
+
+    /**
+     * One-time migration from the legacy single-model layout.
+     *
+     * If `<externalFilesDir>/model.pte` and `tokenizer.json` exist and the
+     * given [defaultModelId] doesn't yet have a per-id copy, move the legacy
+     * files into `models/<defaultModelId>/`. Saves users a re-download after
+     * upgrading the app.
+     */
+    fun migrateLegacyToActive(defaultModelId: String) {
+        val legacyModel = File(rootDir, MODEL_NAME)
+        val legacyTok = File(rootDir, TOKENIZER_NAME)
+        val targetModel = modelFile(defaultModelId)
+        val targetTok = tokenizerFile(defaultModelId)
+        if (!legacyModel.exists() || !legacyTok.exists()) return
+        if (targetModel.exists() && targetTok.exists()) return
+
+        modelDir(defaultModelId).mkdirs()
+        runCatching {
+            if (!targetModel.exists()) {
+                if (!legacyModel.renameTo(targetModel)) {
+                    legacyModel.copyTo(targetModel, overwrite = true)
+                    legacyModel.delete()
+                }
+            }
+            if (!targetTok.exists()) {
+                if (!legacyTok.renameTo(targetTok)) {
+                    legacyTok.copyTo(targetTok, overwrite = true)
+                    legacyTok.delete()
+                }
+            }
+            Log.i(TAG, "migrated legacy model files to models/$defaultModelId/")
+        }.onFailure { t -> Log.w(TAG, "legacy migration failed: ${t.message}") }
+    }
 
     sealed class EnsureResult {
-        /** Manifest missing — caller may still load from APK assets. */
-        data object NoManifest : EnsureResult()
+        /** No active model selected — caller must show the model picker. */
+        data object NeedsSelection : EnsureResult()
 
         /** Files present or downloaded and verified. */
         data object Ready : EnsureResult()
@@ -51,10 +156,14 @@ class ModelFilesRepository(
     }
 
     /**
-     * Blocking (call from [Dispatchers.IO]). [onProgress] receives phase label and byte counts
-     * (total may be -1 if unknown).
+     * Make sure the active model's files exist on disk (download if missing
+     * or stale). Resume-aware via [downloadVerifyRename].
+     *
+     * The catalog entry is supplied by the caller (we don't fetch the manifest
+     * here so callers can prompt for selection first).
      */
-    fun ensureModelArtifacts(
+    fun ensureActiveModel(
+        entry: CatalogModelEntry,
         onProgress: (phase: String, bytesReceived: Long, bytesTotal: Long) -> Unit
     ): EnsureResult {
         synchronized(this) {
@@ -63,94 +172,64 @@ class ModelFilesRepository(
             }
             ensureInProgress = true
         }
-        try {
-        val manifestUrl = "${baseUrl.trimEnd('/')}/v1/model/manifest"
-        val manifestBody = try {
-            getJsonIfPresent(manifestUrl) ?: return EnsureResult.NoManifest
-        } catch (e: Exception) {
-            return EnsureResult.Failed("Model manifest request failed: ${e.message}")
-        }
-
         return try {
-            val root = JSONObject(manifestBody)
-            val version = root.getString("version")
-            val model = root.getJSONObject("model")
-            val tokenizer = root.getJSONObject("tokenizer")
-            val modelUrl = absolutize(model.getString("downloadUrl"))
-            val modelSha = model.getString("checksumSha256").lowercase()
-            val tokUrl = absolutize(tokenizer.getString("downloadUrl"))
-            val tokSha = tokenizer.getString("checksumSha256").lowercase()
-
-            val storedVer = prefs.getString(KEY_MANIFEST_VERSION, null)
-            val mf = modelDest()
-            val tf = tokenizerDest()
-            val filesPresent = mf.exists() && tf.exists() && mf.length() > 0L && tf.length() > 0L
-            if (storedVer == version && filesPresent) {
-                onProgress("Using cached model ($version)", 1L, 1L)
-                return EnsureResult.Ready
-            }
-            // Cost guard: if files already exist and match current manifest checksums,
-            // reuse them even when prefs/version marker is missing or stale.
-            if (filesPresent &&
-                sha256Hex(mf).equals(modelSha, ignoreCase = true) &&
-                sha256Hex(tf).equals(tokSha, ignoreCase = true)
-            ) {
-                prefs.edit().putString(KEY_MANIFEST_VERSION, version).apply()
-                onProgress("Using verified cached model ($version)", 1L, 1L)
-                return EnsureResult.Ready
-            }
-
-            val tmpModel = File(destDir, "$MODEL_NAME.tmp")
-            val tmpTok = File(destDir, "$TOKENIZER_NAME.tmp")
-            tmpModel.delete()
-            tmpTok.delete()
-
-            onProgress("Downloading model…", 0L, -1L)
-            downloadVerifyRename(
-                url = modelUrl,
-                temp = tmpModel,
-                dest = mf,
-                expectedSha = modelSha,
-                onProgress = { r, t -> onProgress("Downloading model…", r, t) }
-            )
-
-            onProgress("Downloading tokenizer…", 0L, -1L)
-            downloadVerifyRename(
-                url = tokUrl,
-                temp = tmpTok,
-                dest = tf,
-                expectedSha = tokSha,
-                onProgress = { r, t -> onProgress("Downloading tokenizer…", r, t) }
-            )
-
-            prefs.edit().putString(KEY_MANIFEST_VERSION, version).apply()
-            EnsureResult.Ready
-        } catch (e: Exception) {
-            EnsureResult.Failed(e.message ?: e::class.simpleName ?: "model download failed")
-        }
+            ensureLocked(entry, onProgress)
+        } catch (t: Throwable) {
+            EnsureResult.Failed(t.message ?: "model download failed")
         } finally {
-            synchronized(this) {
-                ensureInProgress = false
-            }
+            synchronized(this) { ensureInProgress = false }
         }
     }
 
-    private fun getJsonIfPresent(url: String): String? {
-        val req = Request.Builder()
-            .url(url)
-            .header("User-Agent", USER_AGENT)
-            .header("Accept-Encoding", "identity")
-            .get()
-            .build()
-        http.newCall(req).execute().use { resp ->
-            if (resp.code == 404) return null
-            val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) {
-                throw IllegalStateException("HTTP ${resp.code} $text")
-            }
-            if (text.isBlank()) throw IllegalStateException("Empty manifest body")
-            return text
+    private fun ensureLocked(
+        entry: CatalogModelEntry,
+        onProgress: (phase: String, bytesReceived: Long, bytesTotal: Long) -> Unit
+    ): EnsureResult {
+        val mf = modelFile(entry.id)
+        val tf = tokenizerFile(entry.id)
+        val vf = versionFile(entry.id)
+        val filesPresent = mf.exists() && tf.exists() && mf.length() > 0L && tf.length() > 0L
+
+        if (filesPresent && vf.exists() && vf.readText().trim() == entry.version) {
+            onProgress("Using cached ${entry.displayName} (${entry.version})", 1L, 1L)
+            setActiveModelId(entry.id)
+            return EnsureResult.Ready
         }
+        // Cost guard: even if version marker missing, reuse files when checksums match.
+        if (filesPresent &&
+            sha256Hex(mf).equals(entry.modelSha256, ignoreCase = true) &&
+            sha256Hex(tf).equals(entry.tokenizerSha256, ignoreCase = true)
+        ) {
+            vf.writeText(entry.version)
+            setActiveModelId(entry.id)
+            onProgress("Verified cached ${entry.displayName}", 1L, 1L)
+            return EnsureResult.Ready
+        }
+
+        val tmpModel = File(modelDir(entry.id), "$MODEL_NAME.tmp")
+        val tmpTok = File(modelDir(entry.id), "$TOKENIZER_NAME.tmp")
+
+        onProgress("Downloading ${entry.displayName} model…", 0L, -1L)
+        downloadVerifyRename(
+            url = absolutize(entry.modelUrl),
+            temp = tmpModel,
+            dest = mf,
+            expectedSha = entry.modelSha256,
+            onProgress = { r, t -> onProgress("Downloading model…", r, t) }
+        )
+
+        onProgress("Downloading tokenizer…", 0L, -1L)
+        downloadVerifyRename(
+            url = absolutize(entry.tokenizerUrl),
+            temp = tmpTok,
+            dest = tf,
+            expectedSha = entry.tokenizerSha256,
+            onProgress = { r, t -> onProgress("Downloading tokenizer…", r, t) }
+        )
+
+        vf.writeText(entry.version)
+        setActiveModelId(entry.id)
+        return EnsureResult.Ready
     }
 
     private fun downloadVerifyRename(
@@ -171,54 +250,48 @@ class ModelFilesRepository(
         }
         val req = reqBuilder.get().build()
 
-        try {
-            http.newCall(req).execute().use { resp ->
-                if (!(resp.isSuccessful || resp.code == 206)) {
-                    val err = resp.body?.string().orEmpty()
-                    throw IllegalStateException("GET failed HTTP ${resp.code} url=$url $err")
-                }
-                val body = resp.body ?: throw IllegalStateException("No body for $url")
+        http.newCall(req).execute().use { resp ->
+            if (!(resp.isSuccessful || resp.code == 206)) {
+                val err = resp.body?.string().orEmpty()
+                throw IllegalStateException("GET failed HTTP ${resp.code} url=$url $err")
+            }
+            val body = resp.body ?: throw IllegalStateException("No body for $url")
 
-                val append = already > 0L && resp.code == 206
-                if (already > 0L && !append) {
-                    // Server did not honor Range; restart from zero.
-                    temp.delete()
-                }
-                val startAt = if (append) already else 0L
-                val totalFromServer = body.contentLength().takeIf { it >= 0 } ?: -1L
-                val total = if (append && totalFromServer > 0L) startAt + totalFromServer else totalFromServer
+            val append = already > 0L && resp.code == 206
+            if (already > 0L && !append) {
+                temp.delete()
+            }
+            val startAt = if (append) already else 0L
+            val totalFromServer = body.contentLength().takeIf { it >= 0 } ?: -1L
+            val total = if (append && totalFromServer > 0L) startAt + totalFromServer else totalFromServer
 
-                body.byteStream().use { input ->
-                    FileOutputStream(temp, append).use { output ->
-                        val buf = ByteArray(8192)
-                        var received = startAt
+            body.byteStream().use { input ->
+                FileOutputStream(temp, append).use { output ->
+                    val buf = ByteArray(8192)
+                    var received = startAt
+                    onProgress(received, total)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        output.write(buf, 0, n)
+                        received += n
                         onProgress(received, total)
-                        while (true) {
-                            val n = input.read(buf)
-                            if (n <= 0) break
-                            output.write(buf, 0, n)
-                            received += n
-                            onProgress(received, total)
-                        }
                     }
                 }
             }
+        }
 
-            val actual = sha256Hex(temp)
-            if (!actual.equals(expectedSha, ignoreCase = true)) {
-                temp.delete()
-                throw IllegalStateException(
-                    "SHA-256 mismatch for $url (got $actual expected $expectedSha)"
-                )
-            }
-            if (dest.exists()) dest.delete()
-            if (!temp.renameTo(dest)) {
-                temp.copyTo(dest, overwrite = true)
-                temp.delete()
-            }
-        } catch (t: Throwable) {
-            // Keep temp for future resume on transient network failures.
-            throw t
+        val actual = sha256Hex(temp)
+        if (!actual.equals(expectedSha, ignoreCase = true)) {
+            temp.delete()
+            throw IllegalStateException(
+                "SHA-256 mismatch for $url (got $actual expected $expectedSha)"
+            )
+        }
+        if (dest.exists()) dest.delete()
+        if (!temp.renameTo(dest)) {
+            temp.copyTo(dest, overwrite = true)
+            temp.delete()
         }
     }
 
@@ -242,9 +315,11 @@ class ModelFilesRepository(
 
     private companion object {
         const val PREFS = "offgrid_model"
-        const val KEY_MANIFEST_VERSION = "manifest_version"
+        const val KEY_ACTIVE_MODEL_ID = "active_model_id"
         const val MODEL_NAME = "model.pte"
         const val TOKENIZER_NAME = "tokenizer.json"
+        const val VERSION_NAME = ".version"
         const val USER_AGENT = "Offgrid/1.0 (Android; model-download)"
+        const val TAG = "ModelFilesRepo"
     }
 }
