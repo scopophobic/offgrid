@@ -1,5 +1,8 @@
 package com.offgrid.android
 
+import android.content.Context
+import java.io.File
+
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -34,8 +37,10 @@ data class CatalogModelEntry(
  * caller should then surface the legacy single-model flow.
  */
 class ModelCatalogRepository(
-    private val baseUrl: String
+    private val baseUrl: String,
+    context: Context
 ) {
+    private val cache = File(context.filesDir, "model-catalog-cache.json")
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
@@ -45,6 +50,16 @@ class ModelCatalogRepository(
         .build()
 
     fun listModels(): List<CatalogModelEntry> {
+        return try { fetchModels() } catch (e: Exception) {
+            cachedModels().takeIf { it.isNotEmpty() } ?: throw e
+        }
+    }
+
+    fun cachedModels(): List<CatalogModelEntry> = runCatching {
+        if(cache.exists()) parseModels(cache.readText()) else emptyList()
+    }.getOrDefault(emptyList())
+
+    private fun fetchModels(): List<CatalogModelEntry> {
         val url = "${baseUrl.trimEnd('/')}/v1/models"
         val req = Request.Builder()
             .url(url)
@@ -58,12 +73,23 @@ class ModelCatalogRepository(
             }
             val body = resp.body?.string().orEmpty()
             if (body.isBlank()) return emptyList()
+            val entries = parseModels(body)
+            runCatching {
+                val temp = File(cache.parentFile, "${cache.name}.tmp")
+                temp.writeText(body)
+                if(cache.exists()) cache.delete()
+                temp.renameTo(cache)
+            }
+            return entries
+        }
+    }
+
+    private fun parseModels(body: String): List<CatalogModelEntry> {
             val root = JSONObject(body)
             val arr = root.optJSONArray("models") ?: JSONArray()
             return (0 until arr.length()).mapNotNull { i ->
                 runCatching { parseEntry(arr.getJSONObject(i)) }.getOrNull()
             }
-        }
     }
 
     private fun parseEntry(o: JSONObject): CatalogModelEntry {

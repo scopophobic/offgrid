@@ -25,6 +25,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -40,6 +42,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,11 +63,13 @@ import com.offgrid.shared.knowledge.KnowledgePack
 import com.offgrid.shared.models.ModelBootstrapUiState
 
 private val InkBlack = Color(0xFF111111)
-private val SoftMuted = Color(0xFF888888)
-private val FaintRule = Color(0xFFEAEAEA)
-private val UserBubble = Color(0xFFF2F2F2)
+private val SoftMuted = Color(0xFF68746C)
+private val FaintRule = Color(0xFFDCE5DC)
+private val UserBubble = Color(0xFFE1EDE2)
+private val Paper = Color(0xFFF4F7EF)
+private val Forest = Color(0xFF194C3A)
 
-private enum class AppPage { Chat, Knowledge, Settings }
+private enum class AppPage { Chat, Knowledge, Library, Tools, Settings }
 private enum class KnowledgeSubTab { Catalog, Installed }
 
 @Composable
@@ -69,15 +77,19 @@ fun OffgridApp(viewModel: ChatViewModel) {
     var currentPage by rememberSaveable { mutableStateOf(AppPage.Chat) }
     val modelUi by viewModel.modelBootstrapUi.collectAsStateWithLifecycle()
     val chatReady = modelUi is ModelBootstrapUiState.Ready
+    val sharedDraft by viewModel.draft.collectAsStateWithLifecycle()
+    val sharedContent by viewModel.sharedContent.collectAsStateWithLifecycle()
+    LaunchedEffect(sharedDraft) { if(sharedDraft.isNotBlank()) currentPage = AppPage.Chat }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.White)
+                .background(Paper)
                 .padding(horizontal = 20.dp)
                 .padding(top = 16.dp)
         ) {
+            NoticeBar(viewModel)
             ModelBootstrapBanner(
                 state = modelUi,
                 onRetry = { viewModel.retryModelBootstrap() }
@@ -88,11 +100,12 @@ fun OffgridApp(viewModel: ChatViewModel) {
                     .padding(bottom = 12.dp)
             ) {
                 Text(
-                    text = "Offgrid",
+                    text = "OFFGRID  /  FIELD ASSISTANT",
                     modifier = Modifier.align(Alignment.Center),
                     color = InkBlack,
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.SemiBold
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 1.5.sp
                 )
             }
             when (currentPage) {
@@ -109,7 +122,9 @@ fun OffgridApp(viewModel: ChatViewModel) {
                         .weight(1f)
                         .fillMaxWidth()
                 )
-                AppPage.Settings -> SettingsPanel(
+                AppPage.Library -> LibraryPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.weight(1f).fillMaxWidth())
+                AppPage.Tools -> ToolsPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.weight(1f).fillMaxWidth())
+                AppPage.Settings -> SettingsWithPreferences(
                     viewModel = viewModel,
                     modifier = Modifier
                         .weight(1f)
@@ -118,7 +133,7 @@ fun OffgridApp(viewModel: ChatViewModel) {
             }
             NavigationBar(
                 modifier = Modifier.navigationBarsPadding(),
-                containerColor = Color.White,
+                containerColor = Paper,
                 tonalElevation = 0.dp
             ) {
                 NavigationBarItem(
@@ -148,6 +163,18 @@ fun OffgridApp(viewModel: ChatViewModel) {
                     )
                 )
                 NavigationBarItem(
+                    selected = currentPage == AppPage.Library,
+                    onClick = { currentPage = AppPage.Library },
+                    icon = { Icon(Icons.Filled.LibraryBooks, contentDescription = null) },
+                    label = { Text("Library") }
+                )
+                NavigationBarItem(
+                    selected = currentPage == AppPage.Tools,
+                    onClick = { currentPage = AppPage.Tools },
+                    icon = { Icon(Icons.Filled.Build, contentDescription = null) },
+                    label = { Text("Tools") }
+                )
+                NavigationBarItem(
                     selected = currentPage == AppPage.Settings,
                     onClick = { currentPage = AppPage.Settings },
                     icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
@@ -163,14 +190,51 @@ fun OffgridApp(viewModel: ChatViewModel) {
             }
         }
 
+        sharedContent?.let { content ->
+            val url = Regex("https://[^\\s]+", RegexOption.IGNORE_CASE).find(content)?.value
+            val allowed by viewModel.webAllowed.collectAsStateWithLifecycle()
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.sharedContent.value = null },
+                title = { Text(if (url == null) "Make something useful" else "Keep this page for the road") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(content.take(220), color = SoftMuted)
+                        if (url != null) {
+                            Text("Read the page with internet, then save it to your offline library.")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Allow web for this session", Modifier.weight(1f))
+                                androidx.compose.material3.Switch(allowed, viewModel::setWebAllowed)
+                            }
+                            androidx.compose.material3.TextButton(enabled = allowed, onClick = {
+                                viewModel.readWebPage(url)
+                                viewModel.sharedContent.value = null
+                                currentPage = AppPage.Tools
+                            }) { Text("Read page") }
+                        }
+                        ActionStrip {
+                            listOf(TaskAction.ASK, TaskAction.SUMMARIZE, TaskAction.EXPLAIN, TaskAction.CHECKLIST).forEach { task ->
+                                androidx.compose.material3.TextButton(onClick = {
+                                    viewModel.selectedTask.value = task
+                                    viewModel.draft.value = content
+                                    viewModel.sharedContent.value = null
+                                    currentPage = AppPage.Chat
+                                }) { Text(task.label) }
+                            }
+                        }
+                    }
+                },
+                confirmButton = { androidx.compose.material3.TextButton(onClick = { viewModel.sharedContent.value = null }) { Text("Close") } }
+            )
+        }
+
         // First-run picker takes the whole screen until user chooses a model.
-        if (modelUi is ModelBootstrapUiState.NeedsSelection) {
+        if (modelUi is ModelBootstrapUiState.NeedsSelection && currentPage == AppPage.Chat) {
             val freeBytes by viewModel.freeStorageBytes.collectAsStateWithLifecycle()
-            ModelPickerOverlay(
+            Box(Modifier.fillMaxSize().padding(bottom = 88.dp)) { ModelPickerOverlay(
                 available = (modelUi as ModelBootstrapUiState.NeedsSelection).available,
                 freeBytes = freeBytes,
                 onPick = { viewModel.selectModel(it) }
-            )
+            ) }
         } else {
             // Block only Chat with overlay; Knowledge (pack install) and
             // Settings stay reachable while model downloads in background.
@@ -179,10 +243,10 @@ fun OffgridApp(viewModel: ChatViewModel) {
                     (modelUi is ModelBootstrapUiState.Checking ||
                         modelUi is ModelBootstrapUiState.Downloading)
             if (blockChatForModel) {
-                ModelBootstrapFullscreenOverlay(
+                Box(Modifier.fillMaxSize().padding(bottom = 88.dp)) { ModelBootstrapFullscreenOverlay(
                     state = modelUi,
                     onRetry = { viewModel.retryModelBootstrap() }
-                )
+                ) }
             }
         }
     }
@@ -310,6 +374,16 @@ private fun ChatPanel(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val packs by viewModel.installedPacks.collectAsStateWithLifecycle()
     var input by rememberSaveable { mutableStateOf("") }
+    val draft by viewModel.draft.collectAsStateWithLifecycle()
+    val selected by viewModel.selectedItem.collectAsStateWithLifecycle()
+    val collection by viewModel.selectedCollection.collectAsStateWithLifecycle()
+    val library by viewModel.libraryItems.collectAsStateWithLifecycle()
+    val task by viewModel.selectedTask.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val voice = remember { OfflineVoice(context.applicationContext) { viewModel.notice.value = it } }
+    DisposableEffect(voice) { onDispose { voice.close() } }
+    var history by remember { mutableStateOf(false) }
+    LaunchedEffect(draft) { if(draft.isNotBlank()) { input = draft; viewModel.draft.value = "" } }
     val listState = rememberLazyListState()
 
     LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text?.length) {
@@ -324,6 +398,21 @@ private fun ChatPanel(
             .fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        ActionStrip {
+            androidx.compose.material3.TextButton(enabled = !uiState.isLoading, onClick = { viewModel.newChat() }) { Text("New chat") }
+            androidx.compose.material3.TextButton(enabled = !uiState.isLoading, onClick = { history = true }) { Text("History") }
+            androidx.compose.material3.TextButton(enabled = !uiState.isLoading && uiState.messages.isNotEmpty(), onClick = viewModel::retryLast) { Text("Retry last") }
+        }
+
+        Text(if(chatEnabled) "Ready offline · answers generated on this device" else "Choose or download a model to chat", fontSize = 12.sp)
+        selected?.let { item ->
+            Row { Text("Source: ${item.title}", Modifier.weight(1f)); TextButton(onClick = { viewModel.selectedItem.value = null }) { Text("Clear") } }
+        } ?: ActionStrip {
+            androidx.compose.material3.FilterChip(collection.isBlank(), { viewModel.selectedCollection.value = "" }, label = { Text("All knowledge") })
+            library.map { it.collection }.distinct().forEach { name ->
+                androidx.compose.material3.FilterChip(collection == name, { viewModel.selectedCollection.value = name }, label = { Text(name) })
+            }
+        }
         if (uiState.messages.isEmpty()) {
             EmptyChatHint(packCount = packs.size)
         }
@@ -337,11 +426,16 @@ private fun ChatPanel(
                     UserMessageRow(text = message.text)
                 } else {
                     AssistantMessageRow(text = message.text)
+                    AnswerActions(viewModel, message, !uiState.isLoading, voice)
                 }
             }
         }
 
         StatusRow(uiState = uiState)
+        ActionStrip { TaskAction.entries.filter { it != TaskAction.SHORTEN && it != TaskAction.SIMPLIFY }.forEach { action ->
+            androidx.compose.material3.FilterChip(selected = task == action, enabled = !uiState.isLoading, onClick = { viewModel.selectedTask.value = action }, label = { Text(action.label) })
+        } }
+        VoiceControls(viewModel, voice, onText = { input = (input + " " + it).trim() })
 
         uiState.error?.let { error ->
             Text(
@@ -358,38 +452,42 @@ private fun ChatPanel(
             chatEnabled = chatEnabled,
             onSend = {
                 if (input.isNotBlank()) {
-                    viewModel.sendMessage(input)
+                    viewModel.sendMessage(input, task)
+                    viewModel.selectedTask.value = TaskAction.ASK
                     input = ""
                 }
             },
             onStop = { viewModel.stopGeneration() }
         )
     }
+    if(history) ChatHistoryDialog(viewModel) { history = false }
 }
 
 @Composable
 private fun EmptyChatHint(packCount: Int) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).clip(RoundedCornerShape(28.dp)).background(Forest).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = if (packCount > 0) "Ready" else "Ready (no packs installed)",
-            color = SoftMuted,
+            text = "YOUR POCKET FIELD GUIDE  /  01",
+            color = Color(0xFFA8D9B4),
             fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.sp
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 2.sp
         )
+        Text("Go further.\nKnow more.", color = Color.White, fontSize = 34.sp, lineHeight = 37.sp, fontWeight = FontWeight.Bold)
         Text(
             text = if (packCount > 0) {
-                "$packCount pack(s) installed. Ask anything; answers will cite [Source: …] when grounded."
+                "$packCount offline knowledge packs ready. Ask about a place, plan a day, or make sense of what you saved."
             } else {
-                "Tip: install a knowledge pack from the Knowledge tab to ground answers in real content."
+                "Your model is here on your device. Build a field pack in Library or install a travel pack in Knowledge to take reliable context along."
             },
-            color = InkBlack,
+            color = Color(0xFFE2EEE4),
             fontSize = 14.sp,
             lineHeight = 20.sp
         )
+        Text("●  PRIVATE BY DEFAULT     ↗  WEB WHEN YOU CHOOSE", color = Color(0xFFA8D9B4), fontSize = 10.sp, letterSpacing = 0.5.sp)
     }
 }
 
@@ -429,12 +527,12 @@ private fun AssistantMessageRow(text: String) {
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 1.5.sp
         )
-        Text(
+        SelectionContainer { Text(
             text = assistantTextToAnnotated(text.ifBlank { "…" }),
             color = InkBlack,
             fontSize = 15.sp,
             lineHeight = 22.sp
-        )
+        ) }
     }
 }
 
@@ -521,7 +619,7 @@ private fun InputRow(
 }
 
 private fun assistantTextToAnnotated(raw: String): AnnotatedString {
-    val text = raw.replace(Regex("```[\\s\\S]*?```"), "").trim()
+    val text = raw.trim()
     return buildAnnotatedString {
         var i = 0
         while (i < text.length) {

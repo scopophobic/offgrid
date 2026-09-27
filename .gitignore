@@ -42,7 +42,7 @@ tmp/
 tokenizer.json
 
 # Project-specific local model/data folders
-models/
+/models/
 androidApp/src/main/assets/models/smollm2/
 
 # Node / npm
