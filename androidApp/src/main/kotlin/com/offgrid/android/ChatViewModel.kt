@@ -98,6 +98,9 @@ class ChatViewModel(
         if (generationJob != null || toolBusy.value || !personalReady) { notice.value = "Wait for the current action to finish before changing chats."; return }
         _uiState.value = ChatUiState(conversationId = UUID.randomUUID().toString())
         selectedItem.value = null
+        selectedCollection.value = ""
+        selectedTask.value = TaskAction.ASK
+        draft.value = ""
     }
     fun openChat(id: String) {
         if (generationJob != null || !personalReady) { notice.value = "Wait for the current response to finish before changing chats."; return }
@@ -115,7 +118,7 @@ class ChatViewModel(
         personal.saveItem(title, text, collection, location); libraryItems.value = personal.library(); personalPacks.value = personal.packs(); notice.value = "Saved for offline use."
     }
     fun createPersonalPack(name: String, description: String) = toolWork {
-        personal.createPack(name, description); personalPacks.value = personal.packs(); selectedCollection.value = name.trim().take(80); notice.value = "Pack created. Add notes, documents, or saved pages."
+        personal.createPack(name, description); personalPacks.value = personal.packs(); notice.value = "Pack created. Add notes, documents, or saved pages."
     }
     fun importDocument(uri: Uri, collection: String = "Personal") = toolWork {
         val (title, text) = reader.read(uri)

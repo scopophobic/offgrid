@@ -52,21 +52,8 @@ class MainActivity : ComponentActivity() {
         chatViewModel = viewModel
         if(savedInstanceState == null) receiveShare(intent)
         setContent {
-            MaterialTheme(
-                colorScheme = lightColorScheme(
-                    background = Color(0xFFF4F7EF),
-                    surface = Color(0xFFF4F7EF),
-                    onSurface = Color(0xFF17281F),
-                    onBackground = Color(0xFF17281F),
-                    primary = Color(0xFF194C3A),
-                    onPrimary = Color.White,
-                    secondary = Color(0xFFB26139),
-                    onSecondary = Color.White,
-                    surfaceVariant = Color(0xFFE1EDE2),
-                    onSurfaceVariant = Color(0xFF17281F)
-                )
-            ) {
-                Surface(color = Color(0xFFF4F7EF)) {
+            OffgridTheme {
+                Surface(color = MaterialTheme.colorScheme.background) {
                     OffgridApp(viewModel = viewModel)
                 }
             }

@@ -15,9 +15,14 @@ class NavigationTest {
         compose.onAllNodesWithText("Calculate").onLast().performClick()
         compose.onNodeWithText("30").assertIsDisplayed()
         compose.onNodeWithText("Library", useUnmergedTree = true).performClick()
-        compose.onNodeWithText("Your offline library").assertIsDisplayed()
-        compose.onNodeWithText("Settings", useUnmergedTree = true).performClick()
+        compose.onNodeWithText("Your little\nlibrary.").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Assistant preferences").performClick()
         compose.onNodeWithText("Preferences to remember").assertIsDisplayed()
+        compose.onNodeWithText("Dark").performClick()
+        compose.onNodeWithText("Dark").assertIsSelected()
+        compose.onNodeWithText("Light").performClick()
+        compose.onNodeWithText("Light").assertIsSelected()
+        compose.onNodeWithText("System").performClick()
     }
 }

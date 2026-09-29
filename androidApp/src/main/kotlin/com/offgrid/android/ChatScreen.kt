@@ -1,5 +1,10 @@
 package com.offgrid.android
 
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.History
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -62,12 +67,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.offgrid.shared.knowledge.KnowledgePack
 import com.offgrid.shared.models.ModelBootstrapUiState
 
-private val InkBlack = Color(0xFF111111)
-private val SoftMuted = Color(0xFF68746C)
-private val FaintRule = Color(0xFFDCE5DC)
-private val UserBubble = Color(0xFFE1EDE2)
-private val Paper = Color(0xFFF4F7EF)
-private val Forest = Color(0xFF194C3A)
+private val InkBlack @Composable get() = MaterialTheme.colorScheme.onSurface
+private val SoftMuted @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val FaintRule @Composable get() = MaterialTheme.colorScheme.outlineVariant
+private val UserBubble @Composable get() = MaterialTheme.colorScheme.surfaceVariant
+private val Paper @Composable get() = MaterialTheme.colorScheme.background
+private val Forest @Composable get() = MaterialTheme.colorScheme.primary
 
 private enum class AppPage { Chat, Knowledge, Library, Tools, Settings }
 private enum class KnowledgeSubTab { Catalog, Installed }
@@ -81,115 +86,51 @@ fun OffgridApp(viewModel: ChatViewModel) {
     val sharedContent by viewModel.sharedContent.collectAsStateWithLifecycle()
     LaunchedEffect(sharedDraft) { if(sharedDraft.isNotBlank()) currentPage = AppPage.Chat }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Paper)
-                .padding(horizontal = 20.dp)
-                .padding(top = 16.dp)
-        ) {
-            NoticeBar(viewModel)
-            ModelBootstrapBanner(
-                state = modelUi,
-                onRetry = { viewModel.retryModelBootstrap() }
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-            ) {
-                Text(
-                    text = "OFFGRID  /  FIELD ASSISTANT",
-                    modifier = Modifier.align(Alignment.Center),
-                    color = InkBlack,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 1.5.sp
-                )
-            }
-            when (currentPage) {
-                AppPage.Chat -> ChatPanel(
-                    viewModel = viewModel,
-                    chatEnabled = chatReady,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                )
-                AppPage.Knowledge -> KnowledgePanel(
-                    viewModel = viewModel,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                )
-                AppPage.Library -> LibraryPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.weight(1f).fillMaxWidth())
-                AppPage.Tools -> ToolsPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.weight(1f).fillMaxWidth())
-                AppPage.Settings -> SettingsWithPreferences(
-                    viewModel = viewModel,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                )
-            }
-            NavigationBar(
-                modifier = Modifier.navigationBarsPadding(),
-                containerColor = Paper,
-                tonalElevation = 0.dp
-            ) {
-                NavigationBarItem(
-                    selected = currentPage == AppPage.Chat,
-                    onClick = { currentPage = AppPage.Chat },
-                    icon = { Icon(Icons.Filled.Chat, contentDescription = null) },
-                    label = { Text("Chat") },
-                    colors = NavigationBarItemDefaults.colors(
-                        indicatorColor = Color.Transparent,
-                        selectedIconColor = InkBlack,
-                        selectedTextColor = InkBlack,
-                        unselectedIconColor = SoftMuted,
-                        unselectedTextColor = SoftMuted
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentPage == AppPage.Knowledge,
-                    onClick = { currentPage = AppPage.Knowledge },
-                    icon = { Icon(Icons.Filled.MenuBook, contentDescription = null) },
-                    label = { Text("Knowledge") },
-                    colors = NavigationBarItemDefaults.colors(
-                        indicatorColor = Color.Transparent,
-                        selectedIconColor = InkBlack,
-                        selectedTextColor = InkBlack,
-                        unselectedIconColor = SoftMuted,
-                        unselectedTextColor = SoftMuted
-                    )
-                )
-                NavigationBarItem(
-                    selected = currentPage == AppPage.Library,
-                    onClick = { currentPage = AppPage.Library },
-                    icon = { Icon(Icons.Filled.LibraryBooks, contentDescription = null) },
-                    label = { Text("Library") }
-                )
-                NavigationBarItem(
-                    selected = currentPage == AppPage.Tools,
-                    onClick = { currentPage = AppPage.Tools },
-                    icon = { Icon(Icons.Filled.Build, contentDescription = null) },
-                    label = { Text("Tools") }
-                )
-                NavigationBarItem(
-                    selected = currentPage == AppPage.Settings,
-                    onClick = { currentPage = AppPage.Settings },
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                    label = { Text("Settings") },
-                    colors = NavigationBarItemDefaults.colors(
-                        indicatorColor = Color.Transparent,
-                        selectedIconColor = InkBlack,
-                        selectedTextColor = InkBlack,
-                        unselectedIconColor = SoftMuted,
-                        unselectedTextColor = SoftMuted
-                    )
-                )
+    var history by remember { mutableStateOf(false) }
+    var discover by rememberSaveable { mutableStateOf(false) }
+    val pageState = rememberSaveableStateHolder()
+    Column(Modifier.fillMaxSize().background(Paper).safeDrawingPadding().imePadding().padding(horizontal = 24.dp)) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(painterResource(R.drawable.offgrid_mark), null, Modifier.size(23.dp))
+            Spacer(Modifier.width(9.dp))
+            Text("offgrid", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            IconButton(onClick = { history = true }) { Icon(Icons.Default.History, "Saved chats") }
+            IconButton(onClick = { currentPage = AppPage.Settings }) { Icon(Icons.Default.Settings, "Settings") }
+        }
+        NoticeBar(viewModel)
+        ModelBootstrapBanner(modelUi, viewModel::retryModelBootstrap)
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            pageState.SaveableStateProvider(currentPage.name) {
+                when (currentPage) {
+                    AppPage.Chat -> when (val state = modelUi) {
+                        is ModelBootstrapUiState.NeedsSelection -> {
+                            val freeBytes by viewModel.freeStorageBytes.collectAsStateWithLifecycle()
+                            ModelPickerOverlay(state.available, freeBytes, { viewModel.selectModel(it) })
+                        }
+                        is ModelBootstrapUiState.Checking, is ModelBootstrapUiState.Downloading -> ModelBootstrapFullscreenOverlay(state, viewModel::retryModelBootstrap)
+                        else -> ChatPanel(viewModel, chatReady, Modifier.fillMaxSize())
+                    }
+                    AppPage.Library, AppPage.Knowledge -> Column(Modifier.fillMaxSize()) {
+                        ActionStrip {
+                            FilterChip(!discover, { discover = false }, label = { Text("My things") })
+                            FilterChip(discover, { discover = true }, label = { Text("Discover packs") })
+                        }
+                        if (discover) KnowledgePanel(viewModel, Modifier.weight(1f))
+                        else LibraryPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.weight(1f))
+                    }
+                    AppPage.Tools -> ToolsPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.fillMaxSize())
+                    AppPage.Settings -> SettingsWithPreferences(viewModel, Modifier.fillMaxSize())
+                }
             }
         }
-
+        NavigationBar(Modifier.padding(top = 10.dp, bottom = 12.dp).clip(RoundedCornerShape(32.dp)), containerColor = Color(0xFF38273F), windowInsets = WindowInsets(0,0,0,0)) {
+            listOf(Triple(AppPage.Chat,"Ask",Icons.Default.Chat),Triple(AppPage.Library,"Library",Icons.Default.LibraryBooks),Triple(AppPage.Tools,"Tools",Icons.Default.Build)).forEach { (page,label,icon) ->
+                NavigationBarItem(selected=currentPage==page,onClick={currentPage=page},icon={Icon(icon,null)},label={Text(label)},colors=NavigationBarItemDefaults.colors(indicatorColor=Color(0xFFE1D6F2),selectedIconColor=Color(0xFF38273F),selectedTextColor=Color(0xFFFFF9EF),unselectedIconColor=Color(0xFFD9CBDD),unselectedTextColor=Color(0xFFD9CBDD)))
+            }
+        }
+    }
+    if(history) ChatHistoryDialog(viewModel) { history=false; currentPage=AppPage.Chat }
+    Box {
         sharedContent?.let { content ->
             val url = Regex("https://[^\\s]+", RegexOption.IGNORE_CASE).find(content)?.value
             val allowed by viewModel.webAllowed.collectAsStateWithLifecycle()
@@ -227,28 +168,6 @@ fun OffgridApp(viewModel: ChatViewModel) {
             )
         }
 
-        // First-run picker takes the whole screen until user chooses a model.
-        if (modelUi is ModelBootstrapUiState.NeedsSelection && currentPage == AppPage.Chat) {
-            val freeBytes by viewModel.freeStorageBytes.collectAsStateWithLifecycle()
-            Box(Modifier.fillMaxSize().padding(bottom = 88.dp)) { ModelPickerOverlay(
-                available = (modelUi as ModelBootstrapUiState.NeedsSelection).available,
-                freeBytes = freeBytes,
-                onPick = { viewModel.selectModel(it) }
-            ) }
-        } else {
-            // Block only Chat with overlay; Knowledge (pack install) and
-            // Settings stay reachable while model downloads in background.
-            val blockChatForModel =
-                currentPage == AppPage.Chat &&
-                    (modelUi is ModelBootstrapUiState.Checking ||
-                        modelUi is ModelBootstrapUiState.Downloading)
-            if (blockChatForModel) {
-                Box(Modifier.fillMaxSize().padding(bottom = 88.dp)) { ModelBootstrapFullscreenOverlay(
-                    state = modelUi,
-                    onRetry = { viewModel.retryModelBootstrap() }
-                ) }
-            }
-        }
     }
 }
 
@@ -265,14 +184,14 @@ private fun ModelBootstrapBanner(
     ) {
         Text(
             text = state.message,
-            color = Color(0xFFB00020),
+            color = MaterialTheme.colorScheme.error,
             fontSize = 13.sp
         )
         TextButton(onClick = onRetry) {
             Text("Retry model download", color = InkBlack)
         }
         Text(
-            text = "Knowledge tab: packs still install. Chat needs the LLM.",
+            text = "Library and Tools are ready to use. Choose a model in Settings to start chatting.",
             color = SoftMuted,
             fontSize = 12.sp
         )
@@ -293,7 +212,7 @@ private fun ModelBootstrapFullscreenOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.White),
+                    .background(MaterialTheme.colorScheme.background),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -310,7 +229,7 @@ private fun ModelBootstrapFullscreenOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.White),
+                    .background(MaterialTheme.colorScheme.background),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -372,8 +291,7 @@ private fun ChatPanel(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val packs by viewModel.installedPacks.collectAsStateWithLifecycle()
-    var input by rememberSaveable { mutableStateOf("") }
+    var input by rememberSaveable(uiState.conversationId) { mutableStateOf("") }
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val selected by viewModel.selectedItem.collectAsStateWithLifecycle()
     val collection by viewModel.selectedCollection.collectAsStateWithLifecycle()
@@ -383,11 +301,12 @@ private fun ChatPanel(
     val voice = remember { OfflineVoice(context.applicationContext) { viewModel.notice.value = it } }
     DisposableEffect(voice) { onDispose { voice.close() } }
     var history by remember { mutableStateOf(false) }
+    var options by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(draft) { if(draft.isNotBlank()) { input = draft; viewModel.draft.value = "" } }
     val listState = rememberLazyListState()
 
     LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text?.length) {
-        if (uiState.messages.isNotEmpty()) {
+        if (uiState.messages.isNotEmpty() && !listState.canScrollForward) {
             listState.animateScrollToItem(uiState.messages.size - 1)
         }
     }
@@ -398,29 +317,41 @@ private fun ChatPanel(
             .fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        ActionStrip {
+        if (uiState.messages.isNotEmpty()) ActionStrip {
             androidx.compose.material3.TextButton(enabled = !uiState.isLoading, onClick = { viewModel.newChat() }) { Text("New chat") }
-            androidx.compose.material3.TextButton(enabled = !uiState.isLoading, onClick = { history = true }) { Text("History") }
             androidx.compose.material3.TextButton(enabled = !uiState.isLoading && uiState.messages.isNotEmpty(), onClick = viewModel::retryLast) { Text("Retry last") }
         }
 
-        Text(if(chatEnabled) "Ready offline · answers generated on this device" else "Choose or download a model to chat", fontSize = 12.sp)
-        selected?.let { item ->
-            Row { Text("Source: ${item.title}", Modifier.weight(1f)); TextButton(onClick = { viewModel.selectedItem.value = null }) { Text("Clear") } }
-        } ?: ActionStrip {
+        Text(if(chatEnabled) "●  Ready offline · just on this device" else "Choose or download a model to chat", fontSize = 12.sp)
+        if (selected != null || collection.isNotBlank()) Surface(color=MaterialTheme.colorScheme.secondaryContainer,shape=RoundedCornerShape(16.dp)) {
+            Row(Modifier.padding(start=14.dp),verticalAlignment=Alignment.CenterVertically) {
+                Text("Using ${selected?.title ?: collection}",Modifier.weight(1f),maxLines=2)
+                TextButton(onClick={viewModel.selectedItem.value=null;viewModel.selectedCollection.value=""}) { Text("Clear") }
+            }
+        }
+        if (options) ActionStrip {
             androidx.compose.material3.FilterChip(collection.isBlank(), { viewModel.selectedCollection.value = "" }, label = { Text("All knowledge") })
             library.map { it.collection }.distinct().forEach { name ->
                 androidx.compose.material3.FilterChip(collection == name, { viewModel.selectedCollection.value = name }, label = { Text(name) })
             }
         }
-        if (uiState.messages.isEmpty()) {
-            EmptyChatHint(packCount = packs.size)
-        }
+
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            if(uiState.messages.isEmpty()) item {
+                EmptyChatHint()
+                Surface(onClick={ input="Help me make sense of " },color=MaterialTheme.colorScheme.tertiaryContainer,shape=RoundedCornerShape(24.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(24.dp)) {
+                        Text("A GOOD PLACE TO START",style=MaterialTheme.typography.labelSmall)
+                        Text("Make this\nmake sense ↗",style=MaterialTheme.typography.headlineMedium,modifier=Modifier.padding(vertical=12.dp))
+                        Text("Bring a question, a note, or a tangled thought.")
+                    }
+                }
+                TextButton(onClick={input="Explain this simply: ";viewModel.selectedTask.value=TaskAction.EXPLAIN}) { Text("Explain something simply ↗") }
+            }
             items(uiState.messages, key = { it.id }) { message ->
                 if (message.fromUser) {
                     UserMessageRow(text = message.text)
@@ -432,15 +363,16 @@ private fun ChatPanel(
         }
 
         StatusRow(uiState = uiState)
-        ActionStrip { TaskAction.entries.filter { it != TaskAction.SHORTEN && it != TaskAction.SIMPLIFY }.forEach { action ->
+        TextButton(onClick={options=!options}) { Text(if(options) "− Fewer options" else "+ Context & writing tools · ${task.label}") }
+        if(options) ActionStrip { TaskAction.entries.filter { it != TaskAction.SHORTEN && it != TaskAction.SIMPLIFY }.forEach { action ->
             androidx.compose.material3.FilterChip(selected = task == action, enabled = !uiState.isLoading, onClick = { viewModel.selectedTask.value = action }, label = { Text(action.label) })
         } }
-        VoiceControls(viewModel, voice, onText = { input = (input + " " + it).trim() })
+        if(options) VoiceControls(viewModel, voice, onText = { input = (input + " " + it).trim() })
 
         uiState.error?.let { error ->
             Text(
                 text = error,
-                color = Color(0xFFB00020),
+                color = MaterialTheme.colorScheme.error,
                 fontSize = 13.sp
             )
         }
@@ -464,31 +396,8 @@ private fun ChatPanel(
 }
 
 @Composable
-private fun EmptyChatHint(packCount: Int) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).clip(RoundedCornerShape(28.dp)).background(Forest).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = "YOUR POCKET FIELD GUIDE  /  01",
-            color = Color(0xFFA8D9B4),
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 2.sp
-        )
-        Text("Go further.\nKnow more.", color = Color.White, fontSize = 34.sp, lineHeight = 37.sp, fontWeight = FontWeight.Bold)
-        Text(
-            text = if (packCount > 0) {
-                "$packCount offline knowledge packs ready. Ask about a place, plan a day, or make sense of what you saved."
-            } else {
-                "Your model is here on your device. Build a field pack in Library or install a travel pack in Knowledge to take reliable context along."
-            },
-            color = Color(0xFFE2EEE4),
-            fontSize = 14.sp,
-            lineHeight = 20.sp
-        )
-        Text("●  PRIVATE BY DEFAULT     ↗  WEB WHEN YOU CHOOSE", color = Color(0xFFA8D9B4), fontSize = 10.sp, letterSpacing = 0.5.sp)
-    }
+private fun EmptyChatHint() {
+    PocketHeading("Room for\na little curiosity.", "Big question. Small wonder. Start anywhere.")
 }
 
 @Composable
@@ -531,7 +440,7 @@ private fun AssistantMessageRow(text: String) {
             text = assistantTextToAnnotated(text.ifBlank { "…" }),
             color = InkBlack,
             fontSize = 15.sp,
-            lineHeight = 22.sp
+            lineHeight = 25.sp
         ) }
     }
 }
@@ -574,11 +483,12 @@ private fun InputRow(
 ) {
     Column(
         modifier = Modifier
-            .imePadding()
-            .navigationBarsPadding(),
+            .clip(RoundedCornerShape(28.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal=16.dp,vertical=8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(FaintRule))
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -591,6 +501,7 @@ private fun InputRow(
                     value = input,
                     onValueChange = onInputChange,
                     enabled = chatEnabled && !isLoading,
+                    maxLines = 5,
                     cursorBrush = SolidColor(InkBlack),
                     textStyle = LocalTextStyle.current.copy(
                         color = InkBlack,
@@ -612,7 +523,7 @@ private fun InputRow(
             PillButton(
                 label = if (isLoading) "Stop" else "Send",
                 onClick = if (isLoading) onStop else onSend,
-                enabled = chatEnabled || isLoading
+                enabled = (chatEnabled && input.isNotBlank()) || isLoading
             )
         }
     }
@@ -664,13 +575,13 @@ private fun PillButton(
     Box(
         modifier = Modifier
             .clip(CircleShape)
-            .background(if (enabled) InkBlack else Color(0xFFCCCCCC))
+            .background(if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 9.dp)
+            .heightIn(min=48.dp).padding(horizontal = 18.dp, vertical = 14.dp)
     ) {
         Text(
             text = label,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onPrimary,
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium
         )
@@ -742,14 +653,15 @@ private fun KnowledgePanel(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFFF8F8F8))
+                        .background(MaterialTheme.colorScheme.surface)
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     BasicTextField(
                         value = search,
                         onValueChange = { search = it },
                         textStyle = LocalTextStyle.current.copy(color = InkBlack, fontSize = 14.sp),
-                        cursorBrush = SolidColor(InkBlack),
+                        maxLines = 5,
+                    cursorBrush = SolidColor(InkBlack),
                         modifier = Modifier.fillMaxWidth()
                     )
                     if (search.isBlank()) {
@@ -782,7 +694,7 @@ private fun KnowledgePanel(
                                 installing = installingIds.contains(pack.id),
                                 onInstall = { viewModel.installPack(pack.id) }
                             )
-                            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(FaintRule))
+
                         }
                     }
                 }
@@ -807,7 +719,7 @@ private fun KnowledgePanel(
                                 deleting = deletingIds.contains(pack.id),
                                 onDelete = { viewModel.deletePack(pack.id) }
                             )
-                            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(FaintRule))
+
                         }
                     }
                 }
@@ -852,9 +764,9 @@ private fun AvailablePackRow(
                 .clip(RoundedCornerShape(12.dp))
                 .background(
                     when {
-                        installed -> Color(0xFFEFEFEF)
-                        installing -> Color(0xFFDCDCDC)
-                        else -> Color(0xFF111111)
+                        installed -> MaterialTheme.colorScheme.surfaceVariant
+                        installing -> MaterialTheme.colorScheme.surfaceVariant
+                        else -> MaterialTheme.colorScheme.primary
                     }
                 )
                 .clickable(enabled = !installed && !installing, onClick = onInstall)
@@ -866,7 +778,7 @@ private fun AvailablePackRow(
                     installing -> "Installing..."
                     else -> "Install"
                 },
-                color = if (installed || installing) SoftMuted else Color.White,
+                color = if (installed || installing) SoftMuted else MaterialTheme.colorScheme.onPrimary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -929,7 +841,7 @@ private fun PackRow(
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
-                    .background(if (deleting) Color(0xFFE8E8E8) else Color(0xFFF2F2F2))
+                    .background(if (deleting) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant)
                     .clickable(enabled = !deleting, onClick = onDelete)
                     .padding(horizontal = 10.dp, vertical = 6.dp)
             ) {

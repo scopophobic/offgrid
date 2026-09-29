@@ -5,6 +5,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,22 +53,27 @@ fun AnswerActions(vm: ChatViewModel, message: ChatMessage, enabled: Boolean, voi
     val context = LocalContext.current
     var source by remember { mutableStateOf<AnswerSource?>(null) }
     if(message.interrupted) Text("Response interrupted", style = MaterialTheme.typography.labelSmall)
+    var more by remember { mutableStateOf(false) }
     if(message.text.isNotBlank()) ActionStrip {
+        TextButton(onClick = { vm.saveNote("Saved answer", message.text, "Answers") }) { Text("Keep this") }
+        TextButton(enabled = enabled, onClick = { vm.taskPrompt("Make this shorter", message.text) }) { Text("Shorter") }
+        TextButton(onClick={more=!more}) {Text(if(more) "Less" else "More")}
+    }
+    if(more) ActionStrip {
         TextButton(onClick = { clipboard.setText(AnnotatedString(message.text)) }) { Text("Copy") }
         TextButton(onClick = {
             context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, message.text) }, "Share answer"))
         }) { Text("Share") }
-        TextButton(onClick = { vm.saveNote("Saved answer", message.text, "Answers") }) { Text("Save") }
         TextButton(onClick = { voice.speak(message.text) }) { Text("Listen") }
         TextButton(onClick = { voice.stop() }) { Text("Stop audio") }
         TextButton(enabled = enabled, onClick = { vm.taskPrompt("Make this shorter", message.text) }) { Text("Shorter") }
         TextButton(enabled = enabled, onClick = { vm.taskPrompt("Explain this simply", message.text) }) { Text("Simpler") }
     }
     if(message.sources.isNotEmpty()) {
-        Text("Retrieved evidence — tap to inspect", style = MaterialTheme.typography.labelSmall)
+        Text("See what I used", style = MaterialTheme.typography.labelLarge)
         val invalid = CitationAudit.invalidReferences(message.text, message.sources.size)
         if (invalid.isNotEmpty()) Text("Check citations ${invalid.joinToString { "[$it]" }}: no matching source was retrieved.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-        ActionStrip { message.sources.forEachIndexed { i, s -> TextButton(onClick = { source = s }) { Text("[${i+1}] ${s.title.take(35)}") } } }
+        ActionStrip { message.sources.forEachIndexed { i, s -> SuggestionChip(onClick = { source = s }, label = { Text("[${i+1}] ${s.title.take(35)}") }, colors=SuggestionChipDefaults.suggestionChipColors(containerColor=MaterialTheme.colorScheme.secondaryContainer)) } }
     } else if(message.text.isNotBlank()) Text("Model knowledge · no sources retrieved", style = MaterialTheme.typography.labelSmall)
     source?.let { s -> SourceDialog(s, onDismiss = { source = null }, onSave = { vm.saveNote(s.title, s.passage, "Sources", s.location) }) }
 }
@@ -89,6 +98,7 @@ fun ChatHistoryDialog(vm: ChatViewModel, onDismiss: () -> Unit) {
     var title by remember { mutableStateOf("") }
     var deletion by remember { mutableStateOf<SavedChat?>(null) }
     LaunchedEffect(query) { kotlinx.coroutines.delay(250); vm.refreshPersonal(query) }
+    DisposableEffect(Unit) { onDispose { vm.refreshPersonal() } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Saved chats") }, text = {
         Column {
             OutlinedTextField(query, { query = it }, label = { Text("Search chats and messages") }, modifier = Modifier.fillMaxWidth())
@@ -138,58 +148,81 @@ fun LibraryPanel(vm: ChatViewModel, onAsk: () -> Unit, modifier: Modifier = Modi
     var moving by remember { mutableStateOf<LibraryItem?>(null) }
     var moveCollection by remember { mutableStateOf("") }
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { vm.importDocument(it, collection) } }
-    LaunchedEffect(query) { kotlinx.coroutines.delay(250); vm.refreshPersonal(query) }
-    Column(modifier) {
-        Text("FIELD LIBRARY", style = MaterialTheme.typography.labelLarge, color = androidx.compose.ui.graphics.Color(0xFF194C3A))
-        Text("Take knowledge with you.", style = MaterialTheme.typography.headlineMedium)
-        Text("Build a personal pack for a trip, city, or project. Everything in it stays on your device.", style = MaterialTheme.typography.bodyMedium)
-        ActionStrip { TextButton(onClick = { creatingPack = true }) { Text("+ Create a pack") } }
-        if (packs.isNotEmpty()) {
-            Text("YOUR PACKS", style = MaterialTheme.typography.labelLarge)
-            ActionStrip { packs.forEach { pack ->
-                ElevatedCard(onClick = { collection = pack.name; vm.selectedCollection.value = pack.name }, colors = CardDefaults.elevatedCardColors(containerColor = if(collection == pack.name) androidx.compose.ui.graphics.Color(0xFFDAEBDD) else androidx.compose.ui.graphics.Color.White)) {
-                    Column(Modifier.widthIn(min = 150.dp).padding(16.dp)) {
-                        Text("FIELD PACK / ${pack.itemCount} ITEMS", style = MaterialTheme.typography.labelSmall, color = androidx.compose.ui.graphics.Color(0xFF194C3A))
-                        Text(pack.name, style = MaterialTheme.typography.titleMedium)
-                        if(pack.description.isNotBlank()) Text(pack.description, style = MaterialTheme.typography.bodySmall)
+    LaunchedEffect(Unit) { vm.refreshPersonal() }
+    var selectedFolder by rememberSaveable { mutableStateOf<String?>(null) }
+    val visible = items.filter { item ->
+        (selectedFolder == null || item.collection == selectedFolder) &&
+        (query.isBlank() || "${item.title} ${item.text} ${item.collection}".contains(query, ignoreCase = true))
+    }
+    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+        item { PocketHeading("Your little\nlibrary.", "Good things, kept close. Available offline.") }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = { creatingPack = true }) { Text("+ New pack") }
+                OutlinedButton(enabled = !busy, onClick = { adding = true }) { Text("+ Add something") }
+            }
+        }
+        item { OutlinedTextField(query, { query = it }, placeholder = { Text("Find something you kept…") }, singleLine = true, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) }
+        if(selectedFolder != null) item {
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                TextButton(onClick={ selectedFolder=null }) { Text("← All things") }
+                Text(selectedFolder.orEmpty(),Modifier.weight(1f),style=MaterialTheme.typography.titleMedium)
+                TextButton(onClick={ vm.selectedItem.value=null; vm.selectedCollection.value=selectedFolder.orEmpty(); onAsk() }) { Text("Ask pack") }
+            }
+        }
+        if(selectedFolder == null && query.isBlank()) items(packs,key={ "pack:"+it.name }) { pack ->
+            Column {
+                Box(Modifier.width(100.dp).height(14.dp).clip(RoundedCornerShape(topStart=12.dp,topEnd=12.dp)).background(MaterialTheme.colorScheme.secondaryContainer))
+                Surface(onClick={ selectedFolder=pack.name; collection=pack.name },color=MaterialTheme.colorScheme.secondaryContainer,shape=RoundedCornerShape(topEnd=22.dp,bottomStart=22.dp,bottomEnd=22.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                        Text("${pack.itemCount} THINGS · ON THIS DEVICE",style=MaterialTheme.typography.labelSmall)
+                        Text(pack.name,style=MaterialTheme.typography.titleLarge)
+                        if(pack.description.isNotBlank()) Text(pack.description,style=MaterialTheme.typography.bodyMedium)
+                        Text("Open pack ↗",style=MaterialTheme.typography.labelLarge)
                     }
                 }
-            } }
+            }
         }
-        OutlinedTextField(query, { query = it }, label = { Text("Search library or collection") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(collection, { collection = it }, label = { Text("Collection for new items") }, modifier = Modifier.fillMaxWidth())
-        ActionStrip {
-            TextButton(enabled = !busy, onClick = { importer.launch(arrayOf("text/plain", "text/markdown", "application/pdf")) }) { Text("Import file") }
-            TextButton(onClick = { adding = !adding }) { Text("Write / paste note") }
+        if(visible.isEmpty()) item {
+            Surface(color=MaterialTheme.colorScheme.surface,shape=RoundedCornerShape(24.dp)) {
+                Column(Modifier.padding(24.dp)) {
+                    Text(if(query.isBlank()) "A place for your good finds." else "Nothing found yet.",style=MaterialTheme.typography.titleLarge)
+                    Text(if(query.isBlank()) "Add a note or a document. Come back to it, or ask a question about it." else "Try another word or look in all things.",Modifier.padding(top=8.dp))
+                }
+            }
         }
-        if(adding) {
-            OutlinedTextField(title, { title = it }, label = { Text("Title") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(text, { text = it }, label = { Text("Note") }, modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp))
-            TextButton(enabled = !busy && text.isNotBlank(), onClick = { vm.saveNote(title, text, collection); adding = false }) { Text("Save note") }
-        }
-        LazyColumn(Modifier.weight(1f)) {
-            if(items.isEmpty()) item { Text("Save your first note or import a document. It stays available without internet.", Modifier.padding(16.dp)) }
-            items(items, key = { it.id }) { item ->
-                Column(Modifier.padding(vertical = 8.dp)) {
-                    Text(item.title, style = MaterialTheme.typography.titleMedium)
-                    Text("${item.collection} · ${item.text.length} characters", style = MaterialTheme.typography.bodySmall)
+        items(visible,key={it.id}) { item ->
+            Surface(color=MaterialTheme.colorScheme.surface,shape=RoundedCornerShape(20.dp)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text(item.collection,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(item.title,style=MaterialTheme.typography.titleMedium,modifier=Modifier.padding(top=6.dp))
+                    Text(item.text.take(120),maxLines=2,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     ActionStrip {
-                        TextButton(onClick = { opened = item }) { Text("Read") }
-                        TextButton(onClick = { vm.useSource(item); onAsk() }) { Text("Ask") }
-                        TextButton(onClick = { moving = item; moveCollection = item.collection }) { Text("Collection") }
-                        TextButton(onClick = { deletion = item }) { Text("Delete") }
+                        TextButton(onClick={opened=item}) { Text("Read") }
+                        TextButton(onClick={vm.useSource(item);onAsk()}) { Text("Ask") }
+                        TextButton(onClick={moving=item;moveCollection=item.collection}) { Text("Move") }
+                        TextButton(onClick={deletion=item}) { Text("Delete") }
                     }
                 }
             }
         }
     }
+    if(adding) AlertDialog(onDismissRequest={adding=false},title={Text("Keep something good")},text={
+        Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+            OutlinedTextField(collection,{collection=it},label={Text("Collection")})
+            OutlinedButton(enabled=!busy,onClick={importer.launch(arrayOf("text/plain","text/markdown","application/pdf"));adding=false}) { Text("Import a document") }
+            Text("Or write a little note",style=MaterialTheme.typography.titleMedium)
+            OutlinedTextField(title,{title=it},label={Text("Title")})
+            OutlinedTextField(text,{text=it},label={Text("Your note")},modifier=Modifier.heightIn(max=200.dp))
+        }
+    },confirmButton={TextButton(enabled=!busy&&text.isNotBlank(),onClick={vm.saveNote(title,text,collection);adding=false;title="";text=""}) {Text("Keep note")}},dismissButton={TextButton(onClick={adding=false}) {Text("Cancel")}})
     opened?.let { item -> SourceDialog(AnswerSource(item.title, item.text, item.location, item.savedAt), { opened = null }, { vm.notice.value = "Already saved offline." }) }
     deletion?.let { item -> ConfirmDelete(item.title, { deletion = null }) { vm.deleteItem(item.id); deletion = null } }
     moving?.let { item -> EditDialog("Move to collection", moveCollection, { moveCollection = it }, { moving = null }) { vm.moveItem(item.id, moveCollection); moving = null } }
-    if (creatingPack) AlertDialog(onDismissRequest = { creatingPack = false }, title = { Text("Create a field pack") }, text = {
+    if (creatingPack) AlertDialog(onDismissRequest = { creatingPack = false }, title = { Text("A new little collection") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Start with a place or topic. Add notes, documents, and saved pages from this library.")
-            OutlinedTextField(packName, { packName = it }, label = { Text("Pack name · e.g. Kyoto weekend") })
+            OutlinedTextField(packName, { packName = it }, label = { Text("Pack name") })
             OutlinedTextField(packDescription, { packDescription = it }, label = { Text("What is this pack for?") })
         }
     }, confirmButton = { TextButton(enabled = packName.isNotBlank(), onClick = {
@@ -201,6 +234,7 @@ fun LibraryPanel(vm: ChatViewModel, onAsk: () -> Unit, modifier: Modifier = Modi
 fun ToolsPanel(vm: ChatViewModel, onAsk: () -> Unit, modifier: Modifier = Modifier) {
     var section by rememberSaveable { mutableStateOf("Calculate") }
     Column(modifier) {
+        PocketHeading("Little helpers.\nLess hassle.", "A few useful things, right here.")
         ActionStrip { listOf("Calculate", "Convert", "Dates", "Web").forEach { label -> FilterChip(selected = section == label, onClick = { section = label }, label = { Text(label) }) } }
         when(section) {
             "Web" -> WebPanel(vm, onAsk)
@@ -217,7 +251,7 @@ private fun UtilityPanel(section: String) {
     var to by rememberSaveable { mutableStateOf("mi") }
     var result by rememberSaveable(section) { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
-    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.tertiaryContainer).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Works offline · calculated by code", style = MaterialTheme.typography.labelMedium)
         Text(when(section) { "Calculate" -> "Try (120 + 80) * 15% — % means divide by 100."; "Dates" -> "Use YYYY-MM-DD. Result excludes the starting day."; else -> "Length, weight, volume, and temperature." })
         OutlinedTextField(first, { first = it }, label = { Text(when(section) { "Dates" -> "Start date"; "Convert" -> "Value"; else -> "Expression" }) }, modifier = Modifier.fillMaxWidth())
@@ -272,10 +306,15 @@ fun WebPanel(vm: ChatViewModel, onAsk: () -> Unit) {
 
 @Composable
 fun AssistantSettings(vm: ChatViewModel) {
+    val appearance = LocalAppearance.current
     val memory by vm.memories.collectAsStateWithLifecycle()
     var editedMemory by remember(memory) { mutableStateOf(memory) }
     var key by remember { mutableStateOf(vm.webTools.braveKey) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Appearance", style = MaterialTheme.typography.titleMedium)
+        ActionStrip { listOf("System", "Light", "Dark").forEach { mode ->
+            FilterChip(appearance.mode == mode, { appearance.change(mode) }, label = { Text(mode) })
+        } }
         Text("Preferences to remember", style = MaterialTheme.typography.titleMedium)
         Text("Optional, stored on this device. For example: use metric units; explain briefly. Never added to web searches.", style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(editedMemory, { editedMemory = it.take(1500) }, label = { Text("Your preferences") }, modifier = Modifier.fillMaxWidth())
@@ -293,6 +332,7 @@ fun AssistantSettings(vm: ChatViewModel) {
 fun SettingsWithPreferences(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
     var preferences by rememberSaveable { mutableStateOf(false) }
     Column(modifier) {
+        PocketHeading("Make it\nyour own.", "Your assistant. Your device. Your choices.")
         ActionStrip {
             FilterChip(!preferences, { preferences = false }, label = { Text("Models") })
             FilterChip(preferences, { preferences = true }, label = { Text("Assistant preferences") })
