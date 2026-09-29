@@ -1,0 +1,4 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="23dp" android:height="23dp" android:viewportWidth="23" android:viewportHeight="23">
+    <!-- Exact circle geometry from the approved Figma SVG. -->
+    <path android:pathData="M3,11.5a8.5,8.5 0,1 0,17 0a8.5,8.5 0,1 0,-17 0" android:strokeColor="#302238" android:strokeWidth="6" android:fillColor="#00000000" />
+</vector>

@@ -38,6 +38,7 @@ class AndroidPackImporter(private val packsRoot: File) {
             Log.w(TAG, "import skipped: ${zipFile.name} has no manifest.json")
             return null
         }
+        require(previewManifest.id.matches(Regex("[a-z0-9][a-z0-9-]{0,79}"))) { "Invalid pack ID in ZIP." }
         val packDir = File(packsRoot, previewManifest.id)
         if (File(packDir, IMPORTED_SENTINEL).exists()) {
             return previewManifest

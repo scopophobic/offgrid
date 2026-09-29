@@ -1,6 +1,10 @@
 package com.offgrid.android
 
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
@@ -9,18 +13,20 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import com.offgrid.shared.ai.ExecutorchModelManager
 import com.offgrid.shared.knowledge.AndroidKnowledgePackStore
-import com.offgrid.shared.knowledge.HybridRetriever
-import com.offgrid.shared.rag.QueryAnswerCache
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var packStore: AndroidKnowledgePackStore
+    private lateinit var chatViewModel: ChatViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        packStore = AndroidKnowledgePackStore(applicationContext)
         val apiBase = BuildConfig.OFFGRID_API_BASE_URL
-        val viewModel = ChatViewModel(
+        val viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val packStore = AndroidKnowledgePackStore(applicationContext)
+                @Suppress("UNCHECKED_CAST")
+                return ChatViewModel(
+            context = applicationContext,
             packStore = packStore,
             workerPackRepository = WorkerPackRepository(
                 context = applicationContext,
@@ -30,9 +36,7 @@ class MainActivity : ComponentActivity() {
                 context = applicationContext,
                 baseUrl = apiBase
             ),
-            modelCatalogRepository = ModelCatalogRepository(baseUrl = apiBase),
-            retriever = HybridRetriever(packStore),
-            answerCache = QueryAnswerCache(),
+            modelCatalogRepository = ModelCatalogRepository(baseUrl = apiBase, context = applicationContext),
             // Per-model files come from ModelFilesRepository.activeModelPaths();
             // ChatViewModel rebuilds the manager when the active model changes.
             modelManagerFactory = { modelFile, tokenizerFile ->
@@ -42,31 +46,31 @@ class MainActivity : ComponentActivity() {
                     tokenizerFilePathOverride = tokenizerFile.absolutePath
                 )
             }
-        )
+        ) as T
+            }
+        })[ChatViewModel::class.java]
+        chatViewModel = viewModel
+        if(savedInstanceState == null) receiveShare(intent)
         setContent {
-            MaterialTheme(
-                colorScheme = lightColorScheme(
-                    background = Color.White,
-                    surface = Color.White,
-                    onSurface = Color(0xFF111111),
-                    onBackground = Color(0xFF111111),
-                    primary = Color(0xFF111111),
-                    onPrimary = Color.White,
-                    secondary = Color(0xFF666666),
-                    onSecondary = Color.White,
-                    surfaceVariant = Color(0xFFF2F2F2),
-                    onSurfaceVariant = Color(0xFF111111)
-                )
-            ) {
-                Surface(color = Color.White) {
+            OffgridTheme {
+                Surface(color = MaterialTheme.colorScheme.background) {
                     OffgridApp(viewModel = viewModel)
                 }
             }
         }
     }
 
-    override fun onDestroy() {
-        if (::packStore.isInitialized) packStore.close()
-        super.onDestroy()
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        receiveShare(intent)
+    }
+
+    private fun receiveShare(intent: Intent?) {
+        if(intent?.action != Intent.ACTION_SEND) return
+        intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }?.let { chatViewModel.receiveShared(it) }
+        @Suppress("DEPRECATION")
+        val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+        if(uri?.scheme == "content") chatViewModel.importDocument(uri)
     }
 }

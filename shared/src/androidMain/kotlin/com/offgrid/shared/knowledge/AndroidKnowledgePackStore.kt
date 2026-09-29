@@ -29,7 +29,7 @@ import java.io.File
  */
 class AndroidKnowledgePackStore(
     context: Context
-) : KnowledgePackStore {
+) : KnowledgePackStore, java.io.Closeable {
 
     private val packsRoot: File = androidPacksRoot(context)
     private val importer = AndroidPackImporter(packsRoot)
@@ -68,7 +68,7 @@ class AndroidKnowledgePackStore(
      * you want clean shutdown; otherwise SQLite handles will be closed when
      * the process exits.
      */
-    fun close() {
+    override fun close() {
         synchronized(openDatabases) {
             for (db in openDatabases.values) {
                 runCatching { db.close() }
@@ -131,6 +131,7 @@ class AndroidKnowledgePackStore(
      * Then refreshes the in-memory installed list.
      */
     private fun deleteLocked(packId: String): Boolean {
+        require(packId.matches(Regex("[a-z0-9][a-z0-9-]{0,79}"))) { "Invalid pack ID." }
         var changed = false
         openDatabases.remove(packId)?.let { db ->
             runCatching { db.close() }

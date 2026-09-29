@@ -76,21 +76,19 @@ class ExecutorchModelManager(
 
         val finished = AtomicBoolean(false)
         val generatedText = StringBuilder()
-        var emittedChars = 0
+        val visibleText = StringBuilder()
+        val outputParser = VisibleTextStream()
         val callback = object : LlmCallback {
             override fun onResult(result: String) {
                 if (finished.get() || isGenerationStopped.get()) return
                 generatedText.append(result)
-                val normalizedText = normalizeGeneratedText(generatedText.toString())
-                if (normalizedText.length > emittedChars) {
-                    val delta = normalizedText.substring(emittedChars)
-                    emittedChars = normalizedText.length
-                    trySend(delta)
-                }
+                val delta = outputParser.append(result)
+                visibleText.append(delta)
+                if(delta.isNotEmpty()) trySend(delta)
 
                 if (
-                    containsStopSequence(generatedText.toString()) ||
-                    isRepetitiveLoop(normalizedText)
+                    outputParser.stopped ||
+                    isRepetitiveLoop(visibleText.toString())
                 ) {
                     finished.set(true)
                     isGenerationStopped.set(true)
@@ -118,6 +116,7 @@ class ExecutorchModelManager(
         } catch (t: Throwable) {
             trySend("Generation failed: ${t.message ?: "unknown error"}")
         } finally {
+            outputParser.finish().takeIf { it.isNotEmpty() }?.let { trySend(it) }
             finished.set(true)
             isGenerationStopped.set(true)
             close()
@@ -424,16 +423,16 @@ class ExecutorchModelManager(
         // turns, system prompt and final answer all share this. Higher = more
         // memory used but no truncated answers.
         private const val SEQ_LEN = 4096
-        private const val HISTORY_CHAR_BUDGET = 8000
+        private const val HISTORY_CHAR_BUDGET = 2500
 
         const val SYSTEM_PROMPT =
-            "You are Offgrid, a practical offline assistant on the user's phone. " +
+            "You are Offgrid, a practical assistant and travel guide running on the user's phone. " +
                 "Answer concisely. Do NOT think out loud. Do NOT explain your reasoning, " +
                 "your plan, or what you are going to do. Do NOT restate the question. " +
                 "Do NOT write phrases like \"the user is asking\", \"let me see\", " +
                 "\"okay, the user\", \"first I need to\", or \"based on the context\". " +
                 "If a Context block is provided, ground your answer in it and cite sources " +
-                "inline as `[Source: …]` when useful. " +
+                "using its numbered source labels such as [1] when useful. " +
                 "Output ONLY the final reply the user should read, nothing else."
 
         // Do not stop on "<|im_start|>" because some models emit "<|im_start|>assistant"

@@ -1,5 +1,9 @@
 package com.offgrid.android
 
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.History
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,10 +32,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.offgrid.shared.models.ModelInfo
 
-private val InkBlack = Color(0xFF111111)
-private val SoftMuted = Color(0xFF888888)
-private val FaintRule = Color(0xFFEAEAEA)
-private val DangerRed = Color(0xFFB00020)
+private val InkBlack @Composable get() = MaterialTheme.colorScheme.onSurface
+private val SoftMuted @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+private val FaintRule @Composable get() = MaterialTheme.colorScheme.outlineVariant
+private val DangerRed @Composable get() = MaterialTheme.colorScheme.error
 
 @Composable
 fun SettingsPanel(
@@ -82,7 +86,7 @@ fun SettingsPanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFFEFEFEF))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .padding(14.dp)
             ) {
                 Text(
@@ -97,7 +101,7 @@ fun SettingsPanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFFEFEFEF))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .padding(14.dp)
             ) {
                 Text(
@@ -111,7 +115,7 @@ fun SettingsPanel(
 
         if (models.isEmpty()) {
             Text(
-                text = "No models in catalog. Add `model:catalog` on the Worker KV.",
+                text = "No models available yet. Connect to the internet and tap Refresh to try again.",
                 color = SoftMuted,
                 fontSize = 13.sp
             )
@@ -149,7 +153,7 @@ private fun StorageSummary(freeBytes: Long) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFF8F8F8))
+            .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -265,10 +269,10 @@ private fun ActiveBadge() {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(InkBlack)
+            .background(MaterialTheme.colorScheme.primary)
             .padding(horizontal = 8.dp, vertical = 2.dp)
     ) {
-        Text("Active", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        Text("Active", color = MaterialTheme.colorScheme.onPrimary, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -277,7 +281,7 @@ private fun TagChip(tag: String) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFFF2F2F2))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
         Text(tag, color = InkBlack, fontSize = 11.sp)
@@ -292,9 +296,9 @@ private fun TextChip(
     danger: Boolean = false
 ) {
     val bg = when {
-        !enabled -> Color(0xFFF2F2F2)
-        danger -> Color(0xFFFFE8EA)
-        else -> Color(0xFFEFEFEF)
+        !enabled -> MaterialTheme.colorScheme.surfaceVariant
+        danger -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
     }
     val fg = when {
         !enabled -> SoftMuted
@@ -306,7 +310,8 @@ private fun TextChip(
             .clip(RoundedCornerShape(12.dp))
             .background(bg)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp)
+            .heightIn(min = 48.dp)
+            .padding(horizontal = 12.dp, vertical = 14.dp)
     ) {
         Text(
             text = label,
@@ -353,8 +358,8 @@ fun ModelPickerOverlay(
         modifier = Modifier
             .fillMaxWidth()
             .fillMaxHeight()
-            .background(Color.White)
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .background(MaterialTheme.colorScheme.background)
+            .padding(vertical = 16.dp),
         contentAlignment = Alignment.TopCenter
     ) {
         Column(
@@ -362,9 +367,9 @@ fun ModelPickerOverlay(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "Pick a model",
+                text = "A little brain. All yours.",
                 color = InkBlack,
-                fontSize = 22.sp,
+                fontSize = 30.sp,
                 fontWeight = FontWeight.SemiBold
             )
             Text(

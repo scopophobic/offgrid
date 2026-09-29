@@ -70,6 +70,7 @@ class WorkerPackRepository(
      * Verifies SHA-256 before replacing existing file.
      */
     fun installPack(pack: RemotePack) {
+        require(pack.id.matches(Regex("[a-z0-9][a-z0-9-]{0,79}"))) { "Invalid pack ID." }
         val download = getDownloadInfo(pack.id)
         val downloadUrl = absolutize(download.url)
         if (downloadUrl.isBlank()) {

@@ -54,8 +54,10 @@ class ModelFilesRepository(
         prefs.edit().putString(KEY_ACTIVE_MODEL_ID, id).apply()
     }
 
-    fun modelDir(modelId: String): File =
-        File(modelsRoot, modelId).apply { mkdirs() }
+    fun modelDir(modelId: String): File {
+        require(modelId.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}")) && modelId != "..") { "Invalid model ID." }
+        return File(modelsRoot, modelId).apply { mkdirs() }
+    }
 
     fun modelFile(modelId: String): File = File(modelDir(modelId), MODEL_NAME)
     fun tokenizerFile(modelId: String): File = File(modelDir(modelId), TOKENIZER_NAME)
@@ -208,6 +210,10 @@ class ModelFilesRepository(
 
         val tmpModel = File(modelDir(entry.id), "$MODEL_NAME.tmp")
         val tmpTok = File(modelDir(entry.id), "$TOKENIZER_NAME.tmp")
+        val remaining = (entry.sizeBytes - tmpModel.length() - tmpTok.length()).coerceAtLeast(0L)
+        require(freeStorageBytes() >= remaining + 64L * 1024 * 1024) {
+            "Not enough free storage for ${entry.displayName}. Free up space and retry."
+        }
 
         onProgress("Downloading ${entry.displayName} model…", 0L, -1L)
         downloadVerifyRename(
