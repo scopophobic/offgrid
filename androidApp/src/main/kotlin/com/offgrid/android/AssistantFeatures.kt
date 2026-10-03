@@ -52,29 +52,123 @@ fun AnswerActions(vm: ChatViewModel, message: ChatMessage, enabled: Boolean, voi
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     var source by remember { mutableStateOf<AnswerSource?>(null) }
-    if(message.interrupted) Text("Response interrupted", style = MaterialTheme.typography.labelSmall)
-    var more by remember { mutableStateOf(false) }
-    if(message.text.isNotBlank()) ActionStrip {
-        TextButton(onClick = { vm.saveNote("Saved answer", message.text, "Answers") }) { Text("Keep this") }
-        TextButton(enabled = enabled, onClick = { vm.taskPrompt("Make this shorter", message.text) }) { Text("Shorter") }
-        TextButton(onClick={more=!more}) {Text(if(more) "Less" else "More")}
+    var speaking by remember { mutableStateOf(false) }
+    if (message.interrupted) {
+        Text("Response interrupted", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
     }
-    if(more) ActionStrip {
-        TextButton(onClick = { clipboard.setText(AnnotatedString(message.text)) }) { Text("Copy") }
-        TextButton(onClick = {
-            context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, message.text) }, "Share answer"))
-        }) { Text("Share") }
-        TextButton(onClick = { voice.speak(message.text) }) { Text("Listen") }
-        TextButton(onClick = { voice.stop() }) { Text("Stop audio") }
-        TextButton(enabled = enabled, onClick = { vm.taskPrompt("Make this shorter", message.text) }) { Text("Shorter") }
-        TextButton(enabled = enabled, onClick = { vm.taskPrompt("Explain this simply", message.text) }) { Text("Simpler") }
+
+    if (message.text.isNotBlank()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = {
+                    clipboard.setText(AnnotatedString(message.text))
+                    vm.notice.value = "Copied to clipboard."
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    androidx.compose.material.icons.Icons.Default.ContentCopy,
+                    contentDescription = "Copy",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            IconButton(
+                onClick = {
+                    context.startActivity(
+                        Intent.createChooser(
+                            Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, message.text)
+                            },
+                            "Share answer"
+                        )
+                    )
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    androidx.compose.material.icons.Icons.Default.Share,
+                    contentDescription = "Share",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            IconButton(
+                onClick = {
+                    if (speaking) {
+                        voice.stop()
+                        speaking = false
+                    } else {
+                        speaking = true
+                        voice.speak(message.text)
+                    }
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    if (speaking) androidx.compose.material.icons.Icons.Default.Stop else androidx.compose.material.icons.Icons.Default.VolumeUp,
+                    contentDescription = if (speaking) "Stop listening" else "Read aloud",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            IconButton(
+                onClick = { vm.saveNote("Saved answer", message.text, "Answers") },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    androidx.compose.material.icons.Icons.Default.BookmarkBorder,
+                    contentDescription = "Save offline",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            if (enabled) {
+                TextButton(
+                    onClick = { vm.taskPrompt("Make this shorter", message.text) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text("Shorter", fontSize = 12.sp)
+                }
+                TextButton(
+                    onClick = { vm.taskPrompt("Explain this simply", message.text) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text("Simpler", fontSize = 12.sp)
+                }
+            }
+        }
     }
-    if(message.sources.isNotEmpty()) {
-        Text("See what I used", style = MaterialTheme.typography.labelLarge)
+
+    if (message.sources.isNotEmpty()) {
+        Text("Sources", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 4.dp))
         val invalid = CitationAudit.invalidReferences(message.text, message.sources.size)
-        if (invalid.isNotEmpty()) Text("Check citations ${invalid.joinToString { "[$it]" }}: no matching source was retrieved.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-        ActionStrip { message.sources.forEachIndexed { i, s -> SuggestionChip(onClick = { source = s }, label = { Text("[${i+1}] ${s.title.take(35)}") }, colors=SuggestionChipDefaults.suggestionChipColors(containerColor=MaterialTheme.colorScheme.secondaryContainer)) } }
-    } else if(message.text.isNotBlank()) Text("Model knowledge · no sources retrieved", style = MaterialTheme.typography.labelSmall)
+        if (invalid.isNotEmpty()) {
+            Text("Check citations ${invalid.joinToString { "[$it]" }}: no matching source was retrieved.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+        }
+        ActionStrip {
+            message.sources.forEachIndexed { i, s ->
+                SuggestionChip(
+                    onClick = { source = s },
+                    label = { Text("[${i+1}] ${s.title.take(30)}") },
+                    colors = SuggestionChipDefaults.suggestionChipColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                )
+            }
+        }
+    }
     source?.let { s -> SourceDialog(s, onDismiss = { source = null }, onSave = { vm.saveNote(s.title, s.passage, "Sources", s.location) }) }
 }
 

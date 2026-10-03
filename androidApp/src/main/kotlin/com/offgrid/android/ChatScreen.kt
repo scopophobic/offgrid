@@ -1,71 +1,54 @@
 package com.offgrid.android
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.material.icons.filled.History
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.MenuBook
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.LibraryBooks
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.offgrid.shared.knowledge.KnowledgePack
 import com.offgrid.shared.models.ModelBootstrapUiState
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val InkBlack @Composable get() = MaterialTheme.colorScheme.onSurface
 private val SoftMuted @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
@@ -84,52 +67,132 @@ fun OffgridApp(viewModel: ChatViewModel) {
     val chatReady = modelUi is ModelBootstrapUiState.Ready
     val sharedDraft by viewModel.draft.collectAsStateWithLifecycle()
     val sharedContent by viewModel.sharedContent.collectAsStateWithLifecycle()
-    LaunchedEffect(sharedDraft) { if(sharedDraft.isNotBlank()) currentPage = AppPage.Chat }
+    LaunchedEffect(sharedDraft) { if (sharedDraft.isNotBlank()) currentPage = AppPage.Chat }
 
-    var history by remember { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
     var discover by rememberSaveable { mutableStateOf(false) }
     val pageState = rememberSaveableStateHolder()
-    Column(Modifier.fillMaxSize().background(Paper).safeDrawingPadding().imePadding().padding(horizontal = 24.dp)) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(painterResource(R.drawable.offgrid_mark), null, Modifier.size(23.dp))
-            Spacer(Modifier.width(9.dp))
-            Text("offgrid", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            IconButton(onClick = { history = true }) { Icon(Icons.Default.History, "Saved chats") }
-            IconButton(onClick = { currentPage = AppPage.Settings }) { Icon(Icons.Default.Settings, "Settings") }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            OffgridDrawerContent(
+                viewModel = viewModel,
+                currentPage = currentPage,
+                onSelectPage = { page ->
+                    currentPage = page
+                    scope.launch { drawerState.close() }
+                },
+                onSelectChat = { chatId ->
+                    viewModel.openChat(chatId)
+                    currentPage = AppPage.Chat
+                    scope.launch { drawerState.close() }
+                },
+                onNewChat = {
+                    viewModel.newChat()
+                    currentPage = AppPage.Chat
+                    scope.launch { drawerState.close() }
+                }
+            )
         }
-        NoticeBar(viewModel)
-        ModelBootstrapBanner(modelUi, viewModel::retryModelBootstrap)
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            pageState.SaveableStateProvider(currentPage.name) {
-                when (currentPage) {
-                    AppPage.Chat -> when (val state = modelUi) {
-                        is ModelBootstrapUiState.NeedsSelection -> {
-                            val freeBytes by viewModel.freeStorageBytes.collectAsStateWithLifecycle()
-                            ModelPickerOverlay(state.available, freeBytes, { viewModel.selectModel(it) })
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(Paper)
+                .safeDrawingPadding()
+                .imePadding()
+                .padding(horizontal = 20.dp)
+        ) {
+            // Modern, minimalist top navigation bar
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = { scope.launch { drawerState.open() } },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Menu,
+                        contentDescription = "Open sidebar",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                Spacer(Modifier.width(4.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable {
+                            if (currentPage != AppPage.Chat) currentPage = AppPage.Chat
                         }
-                        is ModelBootstrapUiState.Checking, is ModelBootstrapUiState.Downloading -> ModelBootstrapFullscreenOverlay(state, viewModel::retryModelBootstrap)
-                        else -> ChatPanel(viewModel, chatReady, Modifier.fillMaxSize())
-                    }
-                    AppPage.Library, AppPage.Knowledge -> Column(Modifier.fillMaxSize()) {
-                        ActionStrip {
-                            FilterChip(!discover, { discover = false }, label = { Text("My things") })
-                            FilterChip(discover, { discover = true }, label = { Text("Discover packs") })
+                ) {
+                    Icon(painterResource(R.drawable.offgrid_mark), null, Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        when (currentPage) {
+                            AppPage.Chat -> "offgrid"
+                            AppPage.Library, AppPage.Knowledge -> "library"
+                            AppPage.Tools -> "tools"
+                            AppPage.Settings -> "settings"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                IconButton(
+                    onClick = {
+                        viewModel.newChat()
+                        currentPage = AppPage.Chat
+                    },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = "New chat",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            NoticeBar(viewModel)
+            ModelBootstrapBanner(modelUi, viewModel::retryModelBootstrap)
+
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                pageState.SaveableStateProvider(currentPage.name) {
+                    when (currentPage) {
+                        AppPage.Chat -> when (val state = modelUi) {
+                            is ModelBootstrapUiState.NeedsSelection -> {
+                                val freeBytes by viewModel.freeStorageBytes.collectAsStateWithLifecycle()
+                                ModelPickerOverlay(state.available, freeBytes, { viewModel.selectModel(it) })
+                            }
+                            is ModelBootstrapUiState.Checking, is ModelBootstrapUiState.Downloading ->
+                                ModelBootstrapFullscreenOverlay(state, viewModel::retryModelBootstrap)
+                            else -> ChatPanel(viewModel, chatReady, Modifier.fillMaxSize())
                         }
-                        if (discover) KnowledgePanel(viewModel, Modifier.weight(1f))
-                        else LibraryPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.weight(1f))
+                        AppPage.Library, AppPage.Knowledge -> Column(Modifier.fillMaxSize()) {
+                            ActionStrip {
+                                FilterChip(!discover, { discover = false }, label = { Text("My things") })
+                                FilterChip(discover, { discover = true }, label = { Text("Discover packs") })
+                            }
+                            if (discover) KnowledgePanel(viewModel, Modifier.weight(1f))
+                            else LibraryPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.weight(1f))
+                        }
+                        AppPage.Tools -> ToolsPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.fillMaxSize())
+                        AppPage.Settings -> SettingsWithPreferences(viewModel, Modifier.fillMaxSize())
                     }
-                    AppPage.Tools -> ToolsPanel(viewModel, { currentPage = AppPage.Chat }, Modifier.fillMaxSize())
-                    AppPage.Settings -> SettingsWithPreferences(viewModel, Modifier.fillMaxSize())
                 }
             }
         }
-        NavigationBar(Modifier.padding(top = 10.dp, bottom = 12.dp).clip(RoundedCornerShape(32.dp)), containerColor = Color(0xFF38273F), windowInsets = WindowInsets(0,0,0,0)) {
-            listOf(Triple(AppPage.Chat,"Ask",Icons.Default.Chat),Triple(AppPage.Library,"Library",Icons.Default.LibraryBooks),Triple(AppPage.Tools,"Tools",Icons.Default.Build)).forEach { (page,label,icon) ->
-                NavigationBarItem(selected=currentPage==page,onClick={currentPage=page},icon={Icon(icon,null)},label={Text(label)},colors=NavigationBarItemDefaults.colors(indicatorColor=Color(0xFFE1D6F2),selectedIconColor=Color(0xFF38273F),selectedTextColor=Color(0xFFFFF9EF),unselectedIconColor=Color(0xFFD9CBDD),unselectedTextColor=Color(0xFFD9CBDD)))
-            }
-        }
     }
-    if(history) ChatHistoryDialog(viewModel) { history=false; currentPage=AppPage.Chat }
+
     Box {
         sharedContent?.let { content ->
             val url = Regex("https://[^\\s]+", RegexOption.IGNORE_CASE).find(content)?.value
@@ -167,7 +230,298 @@ fun OffgridApp(viewModel: ChatViewModel) {
                 confirmButton = { androidx.compose.material3.TextButton(onClick = { viewModel.sharedContent.value = null }) { Text("Close") } }
             )
         }
+    }
+}
 
+@Composable
+private fun OffgridDrawerContent(
+    viewModel: ChatViewModel,
+    currentPage: AppPage,
+    onSelectPage: (AppPage) -> Unit,
+    onSelectChat: (String) -> Unit,
+    onNewChat: () -> Unit
+) {
+    val chats by viewModel.savedChats.collectAsStateWithLifecycle()
+    val activeChatId = viewModel.uiState.collectAsStateWithLifecycle().value.conversationId
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var renameTarget by remember { mutableStateOf<SavedChat?>(null) }
+    var renameTitle by remember { mutableStateOf("") }
+    var deleteTarget by remember { mutableStateOf<SavedChat?>(null) }
+
+    LaunchedEffect(searchQuery) {
+        delay(250)
+        viewModel.refreshPersonal(searchQuery)
+    }
+
+    ModalDrawerSheet(
+        modifier = Modifier.width(310.dp),
+        drawerContainerColor = MaterialTheme.colorScheme.surface,
+        drawerContentColor = MaterialTheme.colorScheme.onSurface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(vertical = 12.dp)
+        ) {
+            // Drawer Top: Branding & New Chat button
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painterResource(R.drawable.offgrid_mark), contentDescription = null, Modifier.size(24.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "offgrid",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Surface(
+                    onClick = onNewChat,
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    tonalElevation = 1.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "New",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+
+            // Search chats field
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Search chats…", fontSize = 13.sp) },
+                leadingIcon = {
+                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp), tint = SoftMuted)
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                )
+            )
+
+            // Section Header: Saved Chats
+            Text(
+                "SAVED CHATS",
+                style = MaterialTheme.typography.labelSmall,
+                color = SoftMuted,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.sp,
+                modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp)
+            )
+
+            // Saved Chats List
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                if (chats.isEmpty()) {
+                    item {
+                        Text(
+                            text = if (searchQuery.isBlank()) "No saved chats yet" else "No matches found",
+                            fontSize = 13.sp,
+                            color = SoftMuted,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                        )
+                    }
+                } else {
+                    items(chats, key = { it.id }) { chat ->
+                        val isSelected = currentPage == AppPage.Chat && chat.id == activeChatId
+                        DrawerChatRow(
+                            chat = chat,
+                            isSelected = isSelected,
+                            onClick = { onSelectChat(chat.id) },
+                            onRename = {
+                                renameTarget = chat
+                                renameTitle = chat.title
+                            },
+                            onDelete = { deleteTarget = chat }
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                color = FaintRule
+            )
+
+            // Navigation destinations: Ask, Library, Tools, Settings
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                NavigationDrawerItem(
+                    label = { Text("Ask", fontWeight = if (currentPage == AppPage.Chat) FontWeight.SemiBold else FontWeight.Normal) },
+                    selected = currentPage == AppPage.Chat,
+                    onClick = { onSelectPage(AppPage.Chat) },
+                    icon = { Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(44.dp)
+                )
+
+                NavigationDrawerItem(
+                    label = { Text("Library", fontWeight = if (currentPage == AppPage.Library || currentPage == AppPage.Knowledge) FontWeight.SemiBold else FontWeight.Normal) },
+                    selected = currentPage == AppPage.Library || currentPage == AppPage.Knowledge,
+                    onClick = { onSelectPage(AppPage.Library) },
+                    icon = { Icon(Icons.Default.LibraryBooks, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(44.dp)
+                )
+
+                NavigationDrawerItem(
+                    label = { Text("Tools", fontWeight = if (currentPage == AppPage.Tools) FontWeight.SemiBold else FontWeight.Normal) },
+                    selected = currentPage == AppPage.Tools,
+                    onClick = { onSelectPage(AppPage.Tools) },
+                    icon = { Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(44.dp)
+                )
+
+                NavigationDrawerItem(
+                    label = { Text("Settings", fontWeight = if (currentPage == AppPage.Settings) FontWeight.SemiBold else FontWeight.Normal) },
+                    selected = currentPage == AppPage.Settings,
+                    onClick = { onSelectPage(AppPage.Settings) },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(44.dp)
+                )
+            }
+        }
+    }
+
+    renameTarget?.let { c ->
+        EditDialog(
+            label = "Rename chat",
+            value = renameTitle,
+            change = { renameTitle = it },
+            dismiss = { renameTarget = null }
+        ) {
+            viewModel.renameChat(c.id, renameTitle)
+            renameTarget = null
+        }
+    }
+
+    deleteTarget?.let { c ->
+        ConfirmDelete(
+            title = c.title,
+            dismiss = { deleteTarget = null }
+        ) {
+            viewModel.deleteChat(c.id)
+            deleteTarget = null
+        }
+    }
+}
+
+@Composable
+private fun DrawerChatRow(
+    chat: SavedChat,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f) else Color.Transparent,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.ChatBubbleOutline,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = if (isSelected) MaterialTheme.colorScheme.primary else SoftMuted
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = chat.title,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                color = InkBlack,
+                modifier = Modifier.weight(1f)
+            )
+
+            Box {
+                IconButton(
+                    onClick = { menuOpen = true },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Chat options",
+                        modifier = Modifier.size(16.dp),
+                        tint = SoftMuted
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        onClick = {
+                            menuOpen = false
+                            onRename()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error) },
+                        onClick = {
+                            menuOpen = false
+                            onDelete()
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 
