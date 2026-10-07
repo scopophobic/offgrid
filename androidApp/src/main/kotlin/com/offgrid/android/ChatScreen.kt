@@ -649,18 +649,22 @@ private fun ChatPanel(
     val draft by viewModel.draft.collectAsStateWithLifecycle()
     val selected by viewModel.selectedItem.collectAsStateWithLifecycle()
     val collection by viewModel.selectedCollection.collectAsStateWithLifecycle()
-    val library by viewModel.libraryItems.collectAsStateWithLifecycle()
     val task by viewModel.selectedTask.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val voice = remember { OfflineVoice(context.applicationContext) { viewModel.notice.value = it } }
     DisposableEffect(voice) { onDispose { voice.close() } }
-    var history by remember { mutableStateOf(false) }
-    var options by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(draft) { if(draft.isNotBlank()) { input = draft; viewModel.draft.value = "" } }
+    var listening by remember { mutableStateOf(false) }
+
+    LaunchedEffect(draft) {
+        if (draft.isNotBlank()) {
+            input = draft
+            viewModel.draft.value = ""
+        }
+    }
     val listState = rememberLazyListState()
 
     LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.text?.length) {
-        if (uiState.messages.isNotEmpty() && !listState.canScrollForward) {
+        if (uiState.messages.isNotEmpty()) {
             listState.animateScrollToItem(uiState.messages.size - 1)
         }
     }
@@ -668,43 +672,59 @@ private fun ChatPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .fillMaxHeight(),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .fillMaxHeight()
     ) {
-        if (uiState.messages.isNotEmpty()) ActionStrip {
-            androidx.compose.material3.TextButton(enabled = !uiState.isLoading, onClick = { viewModel.newChat() }) { Text("New chat") }
-            androidx.compose.material3.TextButton(enabled = !uiState.isLoading && uiState.messages.isNotEmpty(), onClick = viewModel::retryLast) { Text("Retry last") }
-        }
-
-        Text(if(chatEnabled) "●  Ready offline · just on this device" else "Choose or download a model to chat", fontSize = 12.sp)
-        if (selected != null || collection.isNotBlank()) Surface(color=MaterialTheme.colorScheme.secondaryContainer,shape=RoundedCornerShape(16.dp)) {
-            Row(Modifier.padding(start=14.dp),verticalAlignment=Alignment.CenterVertically) {
-                Text("Using ${selected?.title ?: collection}",Modifier.weight(1f),maxLines=2)
-                TextButton(onClick={viewModel.selectedItem.value=null;viewModel.selectedCollection.value=""}) { Text("Clear") }
-            }
-        }
-        if (options) ActionStrip {
-            androidx.compose.material3.FilterChip(collection.isBlank(), { viewModel.selectedCollection.value = "" }, label = { Text("All knowledge") })
-            library.map { it.collection }.distinct().forEach { name ->
-                androidx.compose.material3.FilterChip(collection == name, { viewModel.selectedCollection.value = name }, label = { Text(name) })
-            }
-        }
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            if(uiState.messages.isEmpty()) item {
-                EmptyChatHint()
-                Surface(onClick={ input="Help me make sense of " },color=MaterialTheme.colorScheme.tertiaryContainer,shape=RoundedCornerShape(24.dp)) {
-                    Column(Modifier.fillMaxWidth().padding(24.dp)) {
-                        Text("A GOOD PLACE TO START",style=MaterialTheme.typography.labelSmall)
-                        Text("Make this\nmake sense ↗",style=MaterialTheme.typography.headlineMedium,modifier=Modifier.padding(vertical=12.dp))
-                        Text("Bring a question, a note, or a tangled thought.")
+        // Active context chip (if a document or specific pack is focused)
+        if (selected != null || collection.isNotBlank()) {
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Focus: ${selected?.title ?: collection}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = {
+                            viewModel.selectedItem.value = null
+                            viewModel.selectedCollection.value = ""
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Text("×", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
                 }
-                TextButton(onClick={input="Explain this simply: ";viewModel.selectedTask.value=TaskAction.EXPLAIN}) { Text("Explain something simply ↗") }
+            }
+        }
+
+        // Messages list or minimal empty state
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(vertical = 12.dp)
+        ) {
+            if (uiState.messages.isEmpty()) {
+                item {
+                    MinimalEmptyChat(
+                        onSelectPrompt = { prompt ->
+                            input = prompt
+                        }
+                    )
+                }
             }
             items(uiState.messages, key = { it.id }) { message ->
                 if (message.fromUser) {
@@ -717,25 +737,36 @@ private fun ChatPanel(
         }
 
         StatusRow(uiState = uiState)
-        TextButton(onClick={options=!options}) { Text(if(options) "− Fewer options" else "+ Context & writing tools · ${task.label}") }
-        if(options) ActionStrip { TaskAction.entries.filter { it != TaskAction.SHORTEN && it != TaskAction.SIMPLIFY }.forEach { action ->
-            androidx.compose.material3.FilterChip(selected = task == action, enabled = !uiState.isLoading, onClick = { viewModel.selectedTask.value = action }, label = { Text(action.label) })
-        } }
-        if(options) VoiceControls(viewModel, voice, onText = { input = (input + " " + it).trim() })
 
         uiState.error?.let { error ->
             Text(
                 text = error,
                 color = MaterialTheme.colorScheme.error,
-                fontSize = 13.sp
+                fontSize = 13.sp,
+                modifier = Modifier.padding(bottom = 4.dp)
             )
         }
 
+        // Minimalist input capsule
         InputRow(
             input = input,
             onInputChange = { input = it },
             isLoading = uiState.isLoading,
             chatEnabled = chatEnabled,
+            listening = listening,
+            onToggleVoice = {
+                if (listening) {
+                    voice.stop()
+                    listening = false
+                } else {
+                    listening = true
+                    voice.listen({ heard ->
+                        input = (input + " " + heard).trim()
+                    }) {
+                        listening = false
+                    }
+                }
+            },
             onSend = {
                 if (input.isNotBlank()) {
                     viewModel.sendMessage(input, task)
@@ -746,12 +777,64 @@ private fun ChatPanel(
             onStop = { viewModel.stopGeneration() }
         )
     }
-    if(history) ChatHistoryDialog(viewModel) { history = false }
 }
 
 @Composable
-private fun EmptyChatHint() {
-    PocketHeading("Room for\na little curiosity.", "Big question. Small wonder. Start anywhere.")
+private fun MinimalEmptyChat(
+    onSelectPrompt: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 40.dp, bottom = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            painterResource(R.drawable.offgrid_mark),
+            contentDescription = null,
+            modifier = Modifier.size(42.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.height(14.dp))
+        Text(
+            "Where knowledge stays with you.",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = InkBlack
+        )
+        Text(
+            "Private, offline AI assistant on your device",
+            style = MaterialTheme.typography.bodyMedium,
+            color = SoftMuted,
+            modifier = Modifier.padding(top = 4.dp, bottom = 28.dp)
+        )
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val suggestions = listOf(
+                "Explain how transformers work simply",
+                "Summarize notes from my offline library",
+                "Draft a checklist for packing off-grid"
+            )
+            suggestions.forEach { suggestion ->
+                Surface(
+                    onClick = { onSelectPrompt(suggestion) },
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = suggestion,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = InkBlack,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -762,17 +845,20 @@ private fun UserMessageRow(text: String) {
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.85f)
-                .clip(RoundedCornerShape(18.dp))
-                .background(UserBubble)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .widthIn(max = 310.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer)
+                .padding(horizontal = 16.dp, vertical = 11.dp),
             contentAlignment = Alignment.CenterStart
         ) {
-            Text(
-                text = text,
-                color = InkBlack,
-                fontSize = 15.sp
-            )
+            SelectionContainer {
+                Text(
+                    text = text,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp
+                )
+            }
         }
     }
 }
@@ -781,28 +867,49 @@ private fun UserMessageRow(text: String) {
 private fun AssistantMessageRow(text: String) {
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text(
-            text = "OFFGRID",
-            color = SoftMuted,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.5.sp
-        )
-        SelectionContainer { Text(
-            text = assistantTextToAnnotated(text.ifBlank { "…" }),
-            color = InkBlack,
-            fontSize = 15.sp,
-            lineHeight = 25.sp
-        ) }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                painterResource(R.drawable.offgrid_mark),
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "Offgrid",
+                color = SoftMuted,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        SelectionContainer {
+            Text(
+                text = assistantTextToAnnotated(text.ifBlank { "…" }),
+                color = InkBlack,
+                fontSize = 15.sp,
+                lineHeight = 24.sp
+            )
+        }
     }
 }
 
 @Composable
 private fun StatusRow(uiState: com.offgrid.shared.models.ChatUiState) {
     if (uiState.isRetrieving) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(12.dp),
+                strokeWidth = 1.5.dp,
+                color = SoftMuted
+            )
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = "Searching local knowledge…",
                 color = SoftMuted,
@@ -810,9 +917,12 @@ private fun StatusRow(uiState: com.offgrid.shared.models.ChatUiState) {
             )
         }
     } else if (uiState.isLoading) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             CircularProgressIndicator(
-                modifier = Modifier.width(12.dp).height(12.dp),
+                modifier = Modifier.size(12.dp),
                 strokeWidth = 1.5.dp,
                 color = SoftMuted
             )
@@ -832,53 +942,96 @@ private fun InputRow(
     onInputChange: (String) -> Unit,
     isLoading: Boolean,
     chatEnabled: Boolean,
+    listening: Boolean,
+    onToggleVoice: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
-    Column(
+    Surface(
         modifier = Modifier
-            .clip(RoundedCornerShape(28.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal=16.dp,vertical=8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        shape = RoundedCornerShape(26.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        tonalElevation = 1.dp
     ) {
-
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.Bottom
         ) {
-            Box(modifier = Modifier.weight(1f)) {
+            // Voice dictation button
+            IconButton(
+                onClick = onToggleVoice,
+                modifier = Modifier
+                    .size(38.dp)
+                    .align(Alignment.CenterVertically)
+            ) {
+                Icon(
+                    Icons.Default.Mic,
+                    contentDescription = if (listening) "Stop listening" else "Dictate",
+                    tint = if (listening) MaterialTheme.colorScheme.primary else SoftMuted,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            // Text input field
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .align(Alignment.CenterVertically)
+                    .padding(horizontal = 4.dp, vertical = 6.dp)
+            ) {
                 BasicTextField(
                     value = input,
                     onValueChange = onInputChange,
                     enabled = chatEnabled && !isLoading,
-                    maxLines = 5,
+                    maxLines = 6,
                     cursorBrush = SolidColor(InkBlack),
                     textStyle = LocalTextStyle.current.copy(
                         color = InkBlack,
-                        fontSize = 15.sp
+                        fontSize = 15.sp,
+                        lineHeight = 20.sp
                     ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 10.dp)
+                    modifier = Modifier.fillMaxWidth()
                 )
                 if (input.isEmpty()) {
                     Text(
-                        text = "Ask something…",
+                        text = if (listening) "Listening…" else "Ask anything offline…",
                         color = SoftMuted,
-                        fontSize = 15.sp,
-                        modifier = Modifier.padding(vertical = 10.dp)
+                        fontSize = 15.sp
                     )
                 }
             }
-            PillButton(
-                label = if (isLoading) "Stop" else "Send",
-                onClick = if (isLoading) onStop else onSend,
-                enabled = (chatEnabled && input.isNotBlank()) || isLoading
-            )
+
+            // Circular Send / Stop button
+            val canSend = (chatEnabled && input.isNotBlank()) || isLoading
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when {
+                            isLoading -> MaterialTheme.colorScheme.error
+                            canSend -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                        }
+                    )
+                    .clickable(
+                        enabled = canSend,
+                        onClick = if (isLoading) onStop else onSend
+                    )
+                    .align(Alignment.CenterVertically),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isLoading) Icons.Default.Stop else Icons.Default.ArrowUpward,
+                    contentDescription = if (isLoading) "Stop" else "Send",
+                    tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }
